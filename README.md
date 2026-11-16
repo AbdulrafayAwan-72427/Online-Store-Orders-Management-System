@@ -18,6 +18,7 @@
   <a href="#data-structures">Data Structures</a> ·
   <a href="#getting-started">Getting Started</a> ·
   <a href="#testing">Testing</a> ·
+  <a href="#documentation">Documentation</a> ·
   <a href="API.md">API Reference</a>
 </p>
 
@@ -62,9 +63,12 @@ Order #1016 after explicit trip completion, with assignment and completion entri
 
 </details>
 
-### FIFO processing queue
+<details>
+<summary><strong>FIFO processing queue</strong></summary>
 
 ![FIFO queue with order 1006 at the front and marked NEXT](docs/screenshots/processing-queue.png)
+
+</details>
 
 ### Delivery planning
 
@@ -92,17 +96,23 @@ The test dataset removes the Lahore-Islamabad direct road. Dijkstra then selects
 
 </details>
 
-### Delivery trips
+<details>
+<summary><strong>Delivery trips</strong></summary>
 
 Only Processing orders may be assigned to a trip. Assignment marks them Shipped. Explicit completion marks them Delivered. Cancelling a Planned trip releases its orders back to Processing.
 
 ![Trips page showing one Planned trip and one Completed trip](docs/screenshots/trips.png)
 
-### Activity Log BST
+</details>
+
+<details>
+<summary><strong>Activity Log BST</strong></summary>
 
 The tree uses `(timestamp, logId)` as its key. Inorder traversal gives chronological history. The screenshot shows a tree excerpt, including its right-leaning shape.
 
 ![Activity timeline and an excerpt of the Activity Log BST](docs/screenshots/activity-logs.png)
+
+</details>
 
 ### Linked List vs BST benchmark
 
@@ -164,7 +174,14 @@ The API binds to **127.0.0.1:8080**. CORS permits the frontend at `http://localh
 - Node.js 22 or newer with npm
 - Git Bash and Python 3 for the optional API integration script
 
-### 1. Build and start the backend
+### 1. Clone the repository
+
+```powershell
+git clone https://github.com/AbdulrafayAwan-72427/Online-Store-Orders-Management-System.git
+cd Online-Store-Orders-Management-System
+```
+
+### 2. Build and start the backend
 
 From the project root, in Windows PowerShell:
 
@@ -182,7 +199,7 @@ g++ -std=c++17 -Wall -Wextra server.cpp Store.cpp -o server -pthread
 
 The clean dataset starts with **30 orders, 5 Pending orders, 0 trips and 0 log entries**. The first queued order is **#1006**. Trip and activity-log CSVs are created as the application is used.
 
-### 2. Start the frontend
+### 3. Start the frontend
 
 In a second terminal, from the project root:
 
@@ -194,7 +211,7 @@ npm run dev
 
 Open **[http://localhost:5173](http://localhost:5173)**. Keep both servers running.
 
-### 3. Console application (optional)
+### 4. Console application (optional)
 
 From the project root:
 
@@ -259,6 +276,17 @@ The finalized report records these Windows results from **14 November 2026**. Th
 
 </details>
 
+## Documentation
+
+| Document | Download |
+| --- | --- |
+| Finalized project report | [PDF](reports-documents/Final-Report-Online-Store-Orders.pdf) |
+| Presentation | [PowerPoint](reports-documents/Online-Store-Orders-Presentation.pptx) · [PDF](reports-documents/Online-Store-Orders-Presentation.pdf) |
+| Speaker notes, demo plan and viva preparation | [PDF](reports-documents/Presentation-Demo-and-Viva-Guide.pdf) |
+| Development history | [Phase reports](reports-documents/) |
+| API reference | [API.md](API.md) |
+| Windows setup | [WINDOWS_SETUP.md](WINDOWS_SETUP.md) |
+
 ## Project Files
 
 | File or directory | Purpose |
@@ -273,7 +301,8 @@ The finalized report records these Windows results from **14 November 2026**. Th
 | `frontend/src/lib/api.test.ts` | Frontend API-client tests |
 | `docs/screenshots/` | Images embedded in this README |
 | [`API.md`](API.md) | Endpoint reference and API design |
-| `archive/`, `Phase*-Report.md` | Earlier implementation versions and development history |
+| [`reports-documents/`](reports-documents/) | Final report, presentation, rehearsal guide and phase reports |
+| `archive/` | Earlier implementation versions |
 
 ## Limitations
 
