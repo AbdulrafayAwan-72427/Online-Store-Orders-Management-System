@@ -19,7 +19,7 @@
   <a href="#getting-started">Getting Started</a> ·
   <a href="#testing">Testing</a> ·
   <a href="#documentation">Documentation</a> ·
-  <a href="API.md">API Reference</a>
+  <a href="docs/API.md">API Reference</a>
 </p>
 
 <p align="center">
@@ -124,12 +124,12 @@ On the clean 30-order dataset, the same **1,000 searches** visit **16,400 nodes*
 
 | Custom structure | Source | Role and complexity |
 | --- | --- | --- |
-| Linked List | [`LinkedList.h`](LinkedList.h) | Stores all orders. Append O(1) with a tail pointer. Search and deletion by ID O(n). |
-| Queue | [`OrderQueue.h`](OrderQueue.h) | Pending orders in FIFO order. Enqueue and dequeue O(1). Removal or restoration at a specific position can take O(n). |
-| Stack | [`ActionStack.h`](ActionStack.h) | Supported undo actions in LIFO order. Push and pop O(1). |
-| Order BST | [`OrderBST.h`](OrderBST.h) | Order-ID index. Lookup O(h), where h is height. O(log n) for a balanced shape, O(n) worst case. |
-| Activity Log BST | [`ActivityLog.h`](ActivityLog.h) | Chronological index. Timeline and log-ID search O(n). Insertion includes an O(n) duplicate-ID scan. |
-| Weighted Graph | [`DeliveryGraph.h`](DeliveryGraph.h) | Cities and roads with travel time and distance. Dijkstra uses an O(V²) vertex scan. |
+| Linked List | [`backend/include/dsa/LinkedList.h`](backend/include/dsa/LinkedList.h) | Stores all orders. Append O(1) with a tail pointer. Search and deletion by ID O(n). |
+| Queue | [`backend/include/dsa/OrderQueue.h`](backend/include/dsa/OrderQueue.h) | Pending orders in FIFO order. Enqueue and dequeue O(1). Removal or restoration at a specific position can take O(n). |
+| Stack | [`backend/include/dsa/ActionStack.h`](backend/include/dsa/ActionStack.h) | Supported undo actions in LIFO order. Push and pop O(1). |
+| Order BST | [`backend/include/dsa/OrderBST.h`](backend/include/dsa/OrderBST.h) | Order-ID index. Lookup O(h), where h is height. O(log n) for a balanced shape, O(n) worst case. |
+| Activity Log BST | [`backend/include/dsa/ActivityLog.h`](backend/include/dsa/ActivityLog.h) | Chronological index. Timeline and log-ID search O(n). Insertion includes an O(n) duplicate-ID scan. |
+| Weighted Graph | [`backend/include/dsa/DeliveryGraph.h`](backend/include/dsa/DeliveryGraph.h) | Cities and roads with travel time and distance. Dijkstra uses an O(V²) vertex scan. |
 
 The Order BST loads IDs middle-first. It does **not** rebalance after later insertions. The Activity Log BST can become skewed as timestamps arrive in order.
 
@@ -144,7 +144,7 @@ These costs describe structure operations. Complete application actions also per
 | Karachi via Faisalabad then Multan | 960 min | 1,240 km | Production |
 | Islamabad via Rawalpindi | 275 min | 315 km | Separate test graph |
 
-[`Delivery.h`](Delivery.h) evaluates every permutation of requested stops and selects the least total travel time. The exact method accepts at most six stops. Route values come from the supplied project CSVs, rather than live traffic or mapping services.
+[`backend/include/services/Delivery.h`](backend/include/services/Delivery.h) evaluates every permutation of requested stops and selects the least total travel time. The exact method accepts at most six stops. Route values come from the supplied project CSVs, rather than live traffic or mapping services.
 
 ## Architecture
 
@@ -161,16 +161,17 @@ flowchart TD
 | Backend | C++17, cpp-httplib, nlohmann/json |
 | Frontend | React 19, TypeScript, Vite 6, Tailwind CSS 4 |
 | Visualization | Recharts and React Flow |
-| Persistence | `orders.csv`, `delivery_routes.csv`, `delivery_trips.csv`, `activity_logs.csv` |
+| Persistence | `data/sample/orders.csv`, `data/sample/delivery_routes.csv`, `delivery_trips.csv`, `activity_logs.csv` |
 | Testing | C++ regression suite, shell API integration checks and Vitest |
 
-The API binds to **127.0.0.1:8080**. CORS permits the frontend at `http://localhost:5173` and `http://127.0.0.1:5173`. The standalone Python `app.py` is a legacy demonstration GUI, separate from the React/C++ application.
+The API binds to **127.0.0.1:8080**. CORS permits the frontend at `http://localhost:5173` and `http://127.0.0.1:5173`. The standalone Python `archive/legacy-python/app.py` is a legacy demonstration GUI, separate from the React/C++ application.
 
 ## Getting Started
 
 ### Requirements
 
-- A C++17 compiler, such as MinGW-w64 g++ on Windows
+- A C++17 compiler, such as MinGW-w64 g++ on Windows (including `mingw32-make`)
+- CMake 3.20 or newer
 - Node.js 22 or newer with npm
 - Git Bash and Python 3 for the optional API integration script
 
@@ -183,21 +184,23 @@ cd Online-Store-Orders-Management-System
 
 ### 2. Build and start the backend
 
-From the project root, in Windows PowerShell:
+From the project root, in Windows PowerShell (MinGW-w64):
 
 ```powershell
-g++ -std=c++17 -Wall -Wextra -D_WIN32_WINNT=0x0A00 server.cpp Store.cpp -o server.exe -lws2_32
-.\server.exe 8080 .
+cmake -S . -B build -G "MinGW Makefiles"
+cmake --build build
+.\build\bin\server.exe 8080 .\data\runtime
 ```
 
 On Linux:
 
 ```bash
-g++ -std=c++17 -Wall -Wextra server.cpp Store.cpp -o server -pthread
-./server 8080 .
+cmake -S . -B build
+cmake --build build
+./build/bin/server 8080 ./data/runtime
 ```
 
-The clean dataset starts with **30 orders, 5 Pending orders, 0 trips and 0 log entries**. The first queued order is **#1006**. Trip and activity-log CSVs are created as the application is used.
+CMake seeds missing runtime CSVs from `data/sample/` and `data/test/`. Existing runtime files are preserved. On a fresh checkout, the sample dataset has **30 orders, 5 Pending orders, 0 trips and 0 log entries**, with **#1006** first in the queue. Application writes go to the ignored `data/runtime/` directory.
 
 ### 3. Start the frontend
 
@@ -213,12 +216,15 @@ Open **[http://localhost:5173](http://localhost:5173)**. Keep both servers runni
 
 ### 4. Console application (optional)
 
-From the project root:
+The console uses its current directory for CSV files. From the project root:
 
 ```powershell
-g++ -std=c++17 -Wall -Wextra main.cpp Store.cpp -o store.exe
-.\store.exe
+Push-Location .\data\runtime
+& ..\..\build\bin\store.exe
+Pop-Location
 ```
+
+On Linux: `(cd data/runtime && ../../build/bin/store)`.
 
 ### Windows dependency troubleshooting
 
@@ -237,18 +243,21 @@ If npm reports a blocked esbuild install script, review the package named in tha
 
 ### Commands
 
-C++ regression suite, from the project root on Windows:
+C++ regression suite, after building, from the project root:
 
 ```powershell
-g++ -std=c++17 -Wall -Wextra tests.cpp Store.cpp -o tests.exe
-.\tests.exe
+ctest --test-dir build --output-on-failure
 ```
+
+CTest runs all 347 checks against isolated copies under `build/test-data/`. It does not use your live runtime files.
 
 API integration checks, from the project root using Git Bash:
 
 ```bash
-bash ./test_api.sh
+bash backend/tests/test_api.sh
 ```
+
+The script uses sample fixtures and `build/bin/server` (or `server.exe`), with a separate temporary data directory. An optional first argument selects another server executable.
 
 Frontend checks, from `frontend`:
 
@@ -283,26 +292,31 @@ The finalized report records these Windows results from **14 November 2026**. Th
 | Finalized project report | [PDF](reports-documents/Final-Report-Online-Store-Orders.pdf) |
 | Presentation | [PowerPoint](reports-documents/Online-Store-Orders-Presentation.pptx) · [PDF](reports-documents/Online-Store-Orders-Presentation.pdf) |
 | Speaker notes, demo plan and viva preparation | [PDF](reports-documents/Presentation-Demo-and-Viva-Guide.pdf) |
-| Development history | [Phase reports](reports-documents/) |
-| API reference | [API.md](API.md) |
-| Windows setup | [WINDOWS_SETUP.md](WINDOWS_SETUP.md) |
+| Development history | [Phase reports](reports-documents/development-history/) |
+| API reference | [API.md](docs/API.md) |
+| Windows setup | [WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md) |
 
 ## Project Files
 
-| File or directory | Purpose |
+| Directory or file | Purpose |
 | --- | --- |
-| `Store.h`, `Store.cpp` | Domain rules, structure ownership and CSV persistence |
-| `server.cpp` | C++ HTTP API |
-| `main.cpp` | Console interface |
-| `Order.h` and custom DSA headers | Models and data structures |
-| `Delivery.h` | RoutePlanner and trip model |
-| `frontend/` | React application |
-| `tests.cpp`, `test_api.sh` | Backend and API checks |
-| `frontend/src/lib/api.test.ts` | Frontend API-client tests |
-| `docs/screenshots/` | Images embedded in this README |
-| [`API.md`](API.md) | Endpoint reference and API design |
-| [`reports-documents/`](reports-documents/) | Final report, presentation, rehearsal guide and phase reports |
-| `archive/` | Earlier implementation versions |
+| [`backend/include/models/`](backend/include/models/) | Order model |
+| [`backend/include/dsa/`](backend/include/dsa/) | Six custom data structures |
+| [`backend/include/services/`](backend/include/services/) | Store and delivery planner |
+| [`backend/src/`](backend/src/) | C++ business logic, HTTP server and console |
+| [`backend/tests/`](backend/tests/) | C++ regression suite and API integration checks |
+| [`backend/third_party/`](backend/third_party/) | Unmodified cpp-httplib and nlohmann/json headers |
+| [`frontend/`](frontend/) | React application and API-client tests |
+| [`data/sample/`](data/sample/) | Original production sample CSVs |
+| [`data/test/`](data/test/) | Intermediate-city test graph |
+| `data/runtime/` | Local working CSVs, ignored by Git |
+| [`docs/`](docs/) | API reference, Windows setup and screenshots |
+| [`reports-documents/`](reports-documents/) | Final report, slides and rehearsal guide |
+| [`reports-documents/development-history/`](reports-documents/development-history/) | Historical phase reports with original paths and commands |
+| [`archive/`](archive/) | Earlier implementation versions, including the standalone Python GUI |
+| [`CMakeLists.txt`](CMakeLists.txt) | Shared C++ build and regression-test configuration |
+
+The finalized report and slides retain their original source filenames. Use the paths above and the current setup instructions when running this organized version.
 
 ## Limitations
 

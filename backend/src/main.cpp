@@ -20,18 +20,18 @@
 //  Option 13 (Update order status) is NEW in Phase 3a.
 //
 //  Build (Windows / Linux / Mac):
-//    g++ -std=c++17 -Wall -Wextra main.cpp Store.cpp -o store
-//    ./store        (on Windows: store.exe)
+//   cmake --build build
+//   Run build/bin/store from data/runtime (see docs/WINDOWS_SETUP.md).
 //  Tests:
-//    g++ -std=c++17 -Wall -Wextra tests.cpp Store.cpp -o tests
-//    ./tests        (on Windows: tests.exe)
+//   cmake --build build
+//   ctest --test-dir build --output-on-failure
 // ============================================================
 
 #include <iostream>
 #include <string>
 #include <vector>
 
-#include "Store.h"
+#include "services/Store.h"
 
 using namespace std;
 

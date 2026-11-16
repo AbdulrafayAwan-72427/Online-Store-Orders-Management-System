@@ -1,8 +1,8 @@
 // tests.cpp — Phase 3a regression tests (NEW file)
 //
 // Repeatable, automated tests for the Store. Run:
-//   g++ -std=c++17 -Wall -Wextra tests.cpp Store.cpp -o tests
-//   ./tests        (on Windows: tests.exe)
+//   cmake --build build
+//   ctest --test-dir build --output-on-failure
 //
 // Every test prints PASS or FAIL and the program exits 0 only if
 // ALL tests pass. No test writes to the real orders.csv or
@@ -25,7 +25,7 @@
 #include <string>
 #include <vector>
 
-#include "Store.h"
+#include "services/Store.h"
 
 namespace fs = std::filesystem;
 

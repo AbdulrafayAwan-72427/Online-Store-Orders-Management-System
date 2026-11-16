@@ -1,18 +1,22 @@
 #!/bin/bash
-# test_api.sh — Phase 4A automated API integration test.
+# test_api.sh â€” Phase 4A automated API integration test.
 #
 # Starts the real C++ server on a test port with a COPY of the data
-# in /tmp/api_test (the project folder is never touched), runs curl
+# in build/api-test.* (runtime and sample data stay untouched), runs curl
 # against every endpoint (success + error cases), checks the HTTP
 # status code and a piece of the JSON body, then stops the server.
 #
-# Usage:  ./test_api.sh
-# Requires: ./server built (g++ -std=c++17 -Wall -Wextra server.cpp Store.cpp -o server -pthread)
+# Usage: bash backend/tests/test_api.sh [path/to/server]
+# Requires: CMake-built server, curl, Python 3 and Bash.
 # Exit code: 0 if all checks pass, 1 otherwise.
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SERVER="${1:-$ROOT/build/bin/server}"
+if [ ! -f "$SERVER" ] && [ -f "$SERVER.exe" ]; then SERVER="$SERVER.exe"; fi
+if [ ! -f "$SERVER" ]; then echo "Server not found: $SERVER"; exit 1; fi
 PORT=18080
 BASE="http://127.0.0.1:$PORT/api"
-DIR=/tmp/api_test
+DIR=$(mktemp -d "$ROOT/build/api-test.XXXXXX") || exit 1
 PASS=0
 FAIL=0
 
@@ -26,7 +30,7 @@ check() {
     fi
 }
 
-# pycheck "name" "python-code" — BODY and CODE are passed via env;
+# pycheck "name" "python-code" â€” BODY and CODE are passed via env;
 # the code must exit 0 for a pass. Used for JSON checks grep cannot do.
 pycheck() {
     local name="$1" code="$2"
@@ -38,19 +42,19 @@ pycheck() {
 }
 
 start_server() {
-    ./server "$PORT" "$DIR" > /tmp/api_server.log 2>&1 &
+    "$SERVER" "$PORT" "$DIR" > "$DIR/server.log" 2>&1 &
     SRV=$!
     for _ in $(seq 1 50); do
         if curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health" 2>/dev/null; then return 0; fi
         sleep 0.2
     done
-    echo "Server did not start. Log:"; cat /tmp/api_server.log; exit 1
+    echo "Server did not start. Log:"; cat "$DIR/server.log"; exit 1
 }
 stop_server() { kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; }
 
 echo "=== Phase 4A API integration test ==="
-rm -rf "$DIR"; mkdir -p "$DIR"
-cp orders.csv delivery_routes.csv test_routes_intermediate.csv "$DIR/"
+echo "Isolated API data: $DIR"
+cp "$ROOT/data/sample/orders.csv" "$ROOT/data/sample/delivery_routes.csv" "$ROOT/data/test/test_routes_intermediate.csv" "$DIR/"
 echo "--- Phase 1: production routes ---"
 start_server
 
@@ -168,7 +172,7 @@ check "get missing log 9999 -> 404" 404 "$CODE" "$BODY" 'not found'
 
 # Phase 4B-4: tree endpoints + log filters + process/undo round-trip.
 # Queue state at this point: 1012 was PATCHed to Processing, 1006 was
-# processed, undone, then cancelled — so the front is 1017, not 1006.
+# processed, undone, then cancelled â€” so the front is 1017, not 1006.
 # The round-trip below therefore uses whatever the front currently is.
 BODY=$(curl -s -w "\n%{http_code}" "$BASE/logs/tree"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
 check "logs/tree returns 200 with size" 200 "$CODE" "$BODY" '"size":'
@@ -238,7 +242,7 @@ if LOG3="$LOG3" LOG4="$LOG4" python3 -c 'import os; assert int(os.environ["LOG3"
 BODY=$(curl -s -w "\n%{http_code}" -X POST -H 'Content-Type: application/json' -d '{"source":"Lahore","destination":"Karachi","stops":["Faisalabad"],"audit":"no"}' "$BASE/delivery/multi-stop"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
 check "multi-stop audit:string -> 400 naming audit" 400 "$CODE" "$BODY" "'audit'"
 # 1017 is Pending at this point (queue round-trip restored it), so
-# assigning it must fail with the new message — no console wording.
+# assigning it must fail with the new message â€” no console wording.
 BODY=$(curl -s -w "\n%{http_code}" -X POST -H 'Content-Type: application/json' -d '{"source":"Lahore","destination":"Karachi","stops":[],"order_ids":[1017]}' "$BASE/delivery/trips"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
 check "assign Pending 1017 -> 400, new wording" 400 "$CODE" "$BODY" 'Process it first, then assign it to a trip.'
 pycheck "assign Pending error has no console-menu wording" 'import json,os; d=json.loads(os.environ["BODY"]); assert "option" not in d["error"]'
@@ -277,7 +281,7 @@ check "1031 gone after delete" 404 "$CODE" "$BODY" 'not found'
 stop_server
 
 echo "--- Phase 2: test dataset (genuine intermediate city) ---"
-cp test_routes_intermediate.csv "$DIR/delivery_routes.csv"
+cp "$ROOT/data/test/test_routes_intermediate.csv" "$DIR/delivery_routes.csv"
 rm -f "$DIR/activity_logs.csv" "$DIR/delivery_trips.csv"
 start_server
 BODY=$(curl -s -w "\n%{http_code}" "$BASE/delivery/plan?destination=Islamabad"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)

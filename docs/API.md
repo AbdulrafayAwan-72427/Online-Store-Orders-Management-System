@@ -1,3 +1,5 @@
+> Source layout updated: C++ sources are in `backend/src/`, public headers in `backend/include/`, vendored headers in `backend/third_party/`. Build with CMake from the root and run `build/bin/server 8080 data/runtime`. API contracts below are unchanged.
+
 # Phase 4A — HTTP API
 
 ## 1. HTTP library comparison (checked 13 Nov 2026)
@@ -10,7 +12,7 @@ All three are established, open-source C++ HTTP libraries. The choice is about
 | What it is | Single-file header-only HTTP/HTTPS library (C++11) | Header-only micro-framework (single header available) | Full async web framework (CMake, C++17) |
 | Version checked | **0.66.0** (downloaded 13 Nov 2026, `httplib.h`, 843 KB, MIT) | current master | current master |
 | Dependencies (plain HTTP) | **None** — one header, no build step | Asio (standalone or Boost) — must be fetched/configured | trantor (submodule) + jsoncpp + other CMake deps |
-| Build | Drop `httplib.h` in the folder, `#include` it, `g++ server.cpp Store.cpp` | Needs Asio headers + its own header; more setup on Windows | CMake project, install step, heavier setup |
+| Build | Vendored header; root CMake target `server` | Needs Asio headers + its own header; more setup on Windows | CMake project, install step, heavier setup |
 | Windows | Supported (Winsock), same single header | Supported, but Asio setup is the hard part | Supported, but the CMake install is the hard part |
 | Routing / JSON | Simple handlers (`svr.Get("/api/orders", ...)`); **no built-in JSON** — this API uses nlohmann/json 3.11.3 (see §4) | Macro routing, built-in JSON | Full routing, ORM, built-in JSON |
 | Threading | Thread pool, one handler per request | Thread pool | Async, event loop |
@@ -19,31 +21,27 @@ All three are established, open-source C++ HTTP libraries. The choice is about
 **Chosen: cpp-httplib 0.66.0.**
 
 Why, for *this* project:
-1. **Zero build friction.** The whole point of Phase 4A is to expose the existing `Store`, not to learn a build system. One header, no CMake, no package manager, no extra dependency to install on the user's Windows machine — the same `g++ -std=c++17 -Wall -Wextra server.cpp Store.cpp` command as the console, plus `-pthread` on Linux.
+1. **Vendored headers.** cpp-httplib and nlohmann/json are in `backend/third_party/`. The root CMake build links the platform socket and threading libraries without downloading backend dependencies.
 2. **Established and maintained.** ~20k stars, actively maintained, used in production tools; MIT licence. Not a hand-rolled parser (your requirement) and not an obscure choice.
 3. **Enough, not more.** The API needs routing, query params, JSON bodies, CORS headers, and a thread pool. httplib does all of that. Crow would add an Asio dependency for no benefit at this scale; Drogon would add a whole framework (ORM, async model, CMake install) for an API that is a thin wrapper over `Store`.
 
 Honest limits of the choice:
-- **No built-in JSON.** JSON is handled by nlohmann/json 3.11.3 (`json.hpp`, single header, MIT), vendored in the project folder — see §4. It is a general JSON library, not a hand-rolled writer/reader (the Phase 4A hand-rolled code was removed in Phase 4B). One cost: compiling `json.hpp` together with `httplib.h` is slow — the server build takes ~3 minutes on this VM, so allow up to 120 s+ for it.
+- **No built-in JSON.** JSON is handled by nlohmann/json 3.11.3 (`json.hpp`, single header, MIT), vendored in `backend/third_party/` — see §4. It is a general JSON library, not a hand-rolled writer/reader (the Phase 4A hand-rolled code was removed in Phase 4B). One cost: compiling `json.hpp` together with `httplib.h` is slow — the server build takes ~3 minutes on this VM, so allow up to 120 s+ for it.
 - **No built-in auth.** The API is bound to `127.0.0.1` only (see §5). There is no login (decision D1: single admin actor). Do not expose it to a network.
 - **Thread safety comes from the server, not the library.** `Store` is not thread-safe, so `server.cpp` holds one `std::mutex` around every `Store` call. Requests are handled one at a time inside `Store`; httplib still handles the HTTP work concurrently.
 
 ## 2. Architecture
 
-```
-React (Phase 4B, :5173) ── fetch ──► cpp-httplib server (127.0.0.1:8080)
-                                        │
-                                        ▼
-                                   Store (Store.h/.cpp)
-                                        │
-              ┌──────────────┬───────────┼──────────────┐
-         Linked List    Order BST    Queue / Stack   Log BST
-         orders.csv   delivery_routes.csv  delivery_trips.csv  activity_logs.csv
+```mermaid
+flowchart TD
+    UI["React frontend"] --> API["C++ HTTP API"]
+    API --> STORE["Store and custom DSA"]
+    STORE --> CSV["CSV runtime data"]
 ```
 
 **No business logic is duplicated.** The server is a translator: HTTP + JSON in, `Store` method out, JSON back. Every rule (transition table, queue invariant, assignment rules, rollback) lives in `Store`/`RoutePlanner` exactly as in Phases 3a–3c. The console (`main.cpp`) and the server share the same `Store` code and the same CSV files.
 
-**Server:** `server.cpp` (new). Usage: `./server [port] [data_dir]` — default port `8080`, default data dir `.` (the project folder). On startup it loads all four files, prints the recovery report (see §6), and listens on `127.0.0.1` only.
+**Server:** `server.cpp` (new). Usage: `build/bin/server [port] [data_dir]` — default port `8080`, default data dir `.` (the process working directory); pass `data/runtime` when starting from the project root. On startup it loads all four files, prints the recovery report (see §6), and listens on `127.0.0.1` only.
 
 ## 3. Endpoints
 
@@ -200,20 +198,16 @@ to fail, so there is never a `log_warning` either.
 ## 8. Testing
 
 - `tests.cpp` — the 266 C++ regression checks, plus new groups for trip
-  cancellation and recovery (see `Phase4a-Report.md`).
+  cancellation and recovery (see `../reports-documents/development-history/Phase4a-Report.md`).
 - `test_api.sh` — automated integration test: starts the server on a test
   port with a copy of the data in `/tmp`, runs `curl` against **every**
   endpoint (success + error cases), checks the JSON with `python3 -m json.tool`
-  / `grep`, and stops the server. Run: `./test_api.sh`.
-- Manual `curl` examples are in `Phase4a-Report.md` §5.
+  / `grep`, and stops the server. Run: `bash backend/tests/test_api.sh`.
+- Manual `curl` examples are in `../reports-documents/development-history/Phase4a-Report.md` §5.
 
 ## 9. Limitations
 
-- Windows build of the server is **not yet tested** (no Windows environment
-  on this VM). The code uses only httplib + standard C++ + the same
-  `MoveFileEx` path as Phases 3b/3c; on Windows, build with
-  `g++ -std=c++17 -Wall -Wextra server.cpp Store.cpp -o server.exe -lws2_32`
-  (httplib needs Winsock on Windows). Please run it there.
+- Build and regression checks have recorded Windows results. Current commands are in [Windows setup](WINDOWS_SETUP.md). CMake links Winsock automatically.
 - No auth, no HTTPS — localhost only, by design (decision D1).
 - No rate limiting. For a local demo this is fine; do not expose the port.
 - JSON is now handled by nlohmann/json (§4) — the hand-rolled JSON

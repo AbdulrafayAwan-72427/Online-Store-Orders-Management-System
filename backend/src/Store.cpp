@@ -13,7 +13,7 @@
 //   and nothing changed. There is no state where the order changed
 //   but the log is missing, or vice versa.
 
-#include "Store.h"
+#include "services/Store.h"
 
 #include <chrono>
 #include <ctime>

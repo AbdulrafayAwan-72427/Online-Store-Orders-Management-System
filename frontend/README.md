@@ -25,8 +25,9 @@ No business logic or DSA is implemented in this frontend — only fetch + types
 Terminal 1 — backend (from the project folder, `DSA-Online-Store-Orders/`):
 
 ```bash
-g++ -std=c++17 -Wall -Wextra server.cpp Store.cpp -o server -pthread
-./server 8080 .
+cmake -S . -B build
+cmake --build build
+./build/bin/server 8080 ./data/runtime
 ```
 
 The server binds `127.0.0.1:8080` and allows CORS from `http://localhost:5173`.

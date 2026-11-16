@@ -11,7 +11,7 @@
 // and this server share the same Store code and the same CSV files.
 //
 // Library: cpp-httplib 0.66.0 (httplib.h, single header, MIT, no
-// dependencies for plain HTTP). See API.md for the comparison with
+// dependencies for plain HTTP). See docs/API.md for the comparison with
 // Crow and Drogon and the reasons for the choice.
 //
 // JSON: nlohmann/json 3.11.3 (json.hpp, single header, MIT), used
@@ -39,7 +39,7 @@
 // httplib.h fails with #error even on Windows 10/11. Force it here,
 // before httplib.h is included. Harmless on Linux (guarded by _WIN32).
 // The same define can also be passed on the command line:
-//   g++ ... -D_WIN32_WINNT=0x0A00 server.cpp Store.cpp -o server.exe -lws2_32
+//   cmake --build build --target server
 #ifdef _WIN32
 #undef _WIN32_WINNT
 #define _WIN32_WINNT 0x0A00
@@ -49,7 +49,7 @@
 
 #include "httplib.h"
 #include "json.hpp"
-#include "Store.h"
+#include "services/Store.h"
 
 using json = nlohmann::ordered_json;
 

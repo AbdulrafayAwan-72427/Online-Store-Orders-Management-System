@@ -2,7 +2,7 @@
 // OrderBST.h — Phase 3a: moved verbatim from main.cpp v1 (archive/main_v1.cpp).
 // OrderBST. Unchanged.
 
-#include "Order.h"
+#include "models/Order.h"
 #include <iostream>
 
 // 4. BST (Binary Search Tree) - fast search by order_id

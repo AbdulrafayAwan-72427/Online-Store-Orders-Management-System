@@ -41,14 +41,14 @@
 #include <string>
 #include <vector>
 
-#include "ActionStack.h"
-#include "ActivityLog.h"
-#include "Delivery.h"
-#include "DeliveryGraph.h"
-#include "LinkedList.h"
-#include "Order.h"
-#include "OrderBST.h"
-#include "OrderQueue.h"
+#include "dsa/ActionStack.h"
+#include "dsa/ActivityLog.h"
+#include "services/Delivery.h"
+#include "dsa/DeliveryGraph.h"
+#include "dsa/LinkedList.h"
+#include "models/Order.h"
+#include "dsa/OrderBST.h"
+#include "dsa/OrderQueue.h"
 
 struct Report {
     int total = 0;

@@ -9,12 +9,12 @@ order_id,customer_name,product,category,price_pkr,quantity,order_date,city,statu
 1008,Hira Shah,Face Cream,Beauty,2100,2,2026-10-04,Karachi,Cancelled
 1009,Omar Farooq,Cricket Bat,Sports,7500,1,2026-10-05,Lahore,Shipped
 1010,Maryam Siddiqui,LED Bulb Pack,Electronics,1500,3,2026-10-05,Islamabad,Delivered
-1011,Hassan Ali,Men's Watch,Accessories,9800,1,2026-10-06,Karachi,Delivered
+1011,Hassan Ali,Men's Watch,Accessories,9800,1,2026-10-06,Karachi,Processing
 1012,Zainab Akhtar,Kitchen Set,Home,11200,1,2026-10-06,Lahore,Pending
 1013,Danish Mehmood,Bluetooth Speaker,Electronics,6200,1,2026-10-07,Rawalpindi,Shipped
 1014,Nida Khan,School Bag,Accessories,2800,1,2026-10-07,Faisalabad,Delivered
 1015,Saad Butt,Football,Sports,3400,1,2026-10-08,Multan,Delivered
-1016,Amna Yousuf,Hair Dryer,Electronics,4800,1,2026-10-08,Karachi,Delivered
+1016,Amna Yousuf,Hair Dryer,Electronics,4800,1,2026-10-08,Karachi,Processing
 1017,Ahmed Raza,Power Bank 20000mAh,Electronics,5500,1,2026-10-09,Lahore,Pending
 1018,Rabia Anwar,Shalwar Kameez,Clothing,4600,1,2026-10-09,Islamabad,Shipped
 1019,Umair Khalid,Wireless Mouse,Electronics,2200,1,2026-10-10,Karachi,Delivered
@@ -29,4 +29,3 @@ order_id,customer_name,product,category,price_pkr,quantity,order_date,city,statu
 1028,Shahid Mehmood,Air Cooler,Home,18900,1,2026-10-14,Karachi,Shipped
 1029,Ayesha Malik,Wireless Earbuds,Electronics,7200,1,2026-10-15,Rawalpindi,Delivered
 1030,Hamza Sheikh,Gaming Keyboard,Electronics,9400,1,2026-10-15,Lahore,Processing
-1031,abdullah,facecream,beauty,7500,3,2026-11-16,Rawalpindi,Pending

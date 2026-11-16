@@ -26,8 +26,8 @@
 #include <string>
 #include <vector>
 
-#include "DeliveryGraph.h"
-#include "Order.h"
+#include "dsa/DeliveryGraph.h"
+#include "models/Order.h"
 
 // One confirmed delivery trip. Stored in delivery_trips.csv:
 //   trip_id,source,destination,route,assigned_order_ids,time_min,distance_km,status
