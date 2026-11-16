@@ -1,0 +1,32 @@
+order_id,customer_name,product,category,price_pkr,quantity,order_date,city,status
+1001,Ahmed Raza,Wireless Headphones,Electronics,4500,1,2026-10-01,Lahore,Delivered
+1002,Fatima Noor,Running Shoes,Footwear,6800,1,2026-10-01,Karachi,Delivered
+1003,Ali Khan,Smart Watch,Electronics,12500,1,2026-10-02,Islamabad,Shipped
+1004,Ayesha Malik,Cotton Kurti,Clothing,3200,2,2026-10-02,Lahore,Delivered
+1005,Usman Tariq,Mobile Phone Charger,Electronics,1800,1,2026-10-03,Rawalpindi,Processing
+1006,Sana Iqbal,Handbag,Accessories,5400,1,2026-10-03,Faisalabad,Pending
+1007,Bilal Ahmed,Laptop Stand,Electronics,3900,1,2026-10-04,Multan,Delivered
+1008,Hira Shah,Face Cream,Beauty,2100,2,2026-10-04,Karachi,Cancelled
+1009,Omar Farooq,Cricket Bat,Sports,7500,1,2026-10-05,Lahore,Shipped
+1010,Maryam Siddiqui,LED Bulb Pack,Electronics,1500,3,2026-10-05,Islamabad,Delivered
+1011,Hassan Ali,Men's Watch,Accessories,9800,1,2026-10-06,Karachi,Delivered
+1012,Zainab Akhtar,Kitchen Set,Home,11200,1,2026-10-06,Lahore,Pending
+1013,Danish Mehmood,Bluetooth Speaker,Electronics,6200,1,2026-10-07,Rawalpindi,Shipped
+1014,Nida Khan,School Bag,Accessories,2800,1,2026-10-07,Faisalabad,Delivered
+1015,Saad Butt,Football,Sports,3400,1,2026-10-08,Multan,Delivered
+1016,Amna Yousuf,Hair Dryer,Electronics,4800,1,2026-10-08,Karachi,Delivered
+1017,Ahmed Raza,Power Bank 20000mAh,Electronics,5500,1,2026-10-09,Lahore,Pending
+1018,Rabia Anwar,Shalwar Kameez,Clothing,4600,1,2026-10-09,Islamabad,Shipped
+1019,Umair Khalid,Wireless Mouse,Electronics,2200,1,2026-10-10,Karachi,Delivered
+1020,Sara Hussain,Perfume,Beauty,5900,1,2026-10-10,Lahore,Cancelled
+1021,Talha Iqbal,Study Table,Home,14500,1,2026-10-11,Rawalpindi,Processing
+1022,Mahnoor Asif,Gold Plated Earrings,Accessories,3700,1,2026-10-11,Faisalabad,Pending
+1023,Ali Khan,USB Cable Pack,Electronics,1200,2,2026-10-12,Lahore,Delivered
+1024,Waqas Ahmed,Sneakers,Footwear,8900,1,2026-10-12,Karachi,Shipped
+1025,Laiba Noor,Makeup Kit,Beauty,7600,1,2026-10-13,Islamabad,Delivered
+1026,Salman Raza,Electric Kettle,Home,4100,1,2026-10-13,Multan,Processing
+1027,Eman Tariq,Novel Book,Books,1800,1,2026-10-14,Lahore,Pending
+1028,Shahid Mehmood,Air Cooler,Home,18900,1,2026-10-14,Karachi,Shipped
+1029,Ayesha Malik,Wireless Earbuds,Electronics,7200,1,2026-10-15,Rawalpindi,Delivered
+1030,Hamza Sheikh,Gaming Keyboard,Electronics,9400,1,2026-10-15,Lahore,Processing
+1031,abdullah,facecream,beauty,7500,3,2026-11-16,Rawalpindi,Pending

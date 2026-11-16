@@ -1,0 +1,13 @@
+from_city,to_city,distance_km,travel_time_min
+Lahore,Rawalpindi,290,240
+Lahore,Islamabad,320,260
+Lahore,Faisalabad,180,150
+Lahore,Multan,340,280
+Lahore,Karachi,1210,900
+Rawalpindi,Islamabad,25,35
+Rawalpindi,Faisalabad,320,270
+Islamabad,Faisalabad,340,290
+Islamabad,Multan,540,420
+Faisalabad,Multan,180,150
+Faisalabad,Karachi,1050,780
+Multan,Karachi,880,660

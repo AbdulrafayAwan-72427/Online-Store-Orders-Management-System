@@ -1,0 +1,35 @@
+
+# Frontend dependencies and build output
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Compiled files
+*.exe
+*.o
+*.obj
+/server
+/store
+/tests
+
+# Generated test and runtime files
+/test_work/
+/activity_logs.csv
+/delivery_trips.csv
+*.tmp
+*.log
+
+# Local environment settings
+.env
+.env.*
+!.env.example
+
+# Python cache
+__pycache__/
+*.pyc
+
+Project-Proposal-Online-Store-Orders.*
+
+Project-Proposal-Online-Store-Orders.*
+
+Project-Proposal-Online-Store-Orders.*
