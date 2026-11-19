@@ -61,6 +61,7 @@ passed (Phase 4B-5, read-only demonstrations).
 | `GET /api/orders?status=&city=&date=` | List, filter by status/city/date | 200 `[order...]` |
 | `GET /api/orders/:id` | One order (BST search) + its history | 200 / 404 |
 | `GET /api/orders/tree` | Whole Order BST `{root, size, height}` — recursive walk (Phase 4B-4) | 200 |
+| `GET /api/orders/csv-preview` | Bounded read-only preview of the actual runtime `orders.csv` (fixed path, first 10 data rows) | 200 `{available, path, header, rows, preview_rows, total_rows, truncated}` |
 | `POST /api/orders` | Add order (validates price > 0, quantity ≥ 1, non-empty fields, date format) | 201 / 400 |
 | `PATCH /api/orders/:id/status` | `{status}` — transition table enforced | 200 / 400 / 404 |
 | `POST /api/orders/:id/cancel` | Cancel (Pending/Processing only) | 200 / 400 / 404 |
@@ -99,6 +100,51 @@ passed (Phase 4B-5, read-only demonstrations).
   on a large dataset without paging.
 - Both routes are registered **before** their `/:id` siblings, so
   httplib does not read `"tree"` as an ID.
+
+### CSV preview endpoint ("How CSV becomes orders")
+
+`GET /api/orders/csv-preview` powers the educational panel on the Orders
+page. It reads the **actual runtime orders file** — the same
+`store.ordersPath` that `loadOrders()` reads at startup and that every
+successful mutation rewrites atomically (temp file + rename) — and returns
+a bounded preview of its raw text:
+
+```json
+{
+  "available": true,
+  "path": "data/runtime/orders.csv",
+  "header": "order_id,customer_name,product,category,price_pkr,quantity,order_date,city,status",
+  "rows": ["1001,Ahmed Raza,...", "..."],
+  "preview_rows": 10,
+  "total_rows": 30,
+  "truncated": true
+}
+```
+
+- `path` is the configured runtime file exactly as the server was started
+  (`build/bin/server 8080 data/runtime` → `data/runtime/orders.csv`). It is
+  a label for the UI; **the client cannot select a file** — no path,
+  filename, or query input of any kind is accepted (a `?path=` parameter
+  is ignored). The route is registered **before** `/api/orders/:id`, like
+  `/api/orders/tree`.
+- The preview is bounded: at most the first **10 data rows**, each line
+  capped at 2,000 characters (CRLF line endings are normalised). `rows`
+  are raw file lines as text, exactly as stored — the loader may skip a
+  malformed line, the preview does not edit or interpret anything.
+  `total_rows` counts all non-empty data lines in the file; `truncated`
+  says whether rows were left out.
+- **Missing/unreadable file → HTTP 200** with `"available": false`, empty
+  `header`/`rows`, zero counts, and a `message`. This is deliberate: the
+  endpoint is a best-effort teaching preview, so it degrades gracefully
+  instead of erroring. The server keeps running, the orders already
+  loaded in memory are unaffected, and the next successful change
+  recreates the file (the usual atomic save).
+- The file is read under the same mutex as every other handler. Saves are
+  atomic, so a reader sees the old file or the new file whole — never a
+  half-written one. The endpoint is read-only: it adds no write path, and
+  localhost binding + CORS are unchanged.
+- The frontend renders the returned text as plain text (React text
+  nodes), never as HTML.
 
 ### Graph endpoint + dataset demo mode (Phase 4B-3)
 

@@ -5,7 +5,7 @@
 // helpers formatPkr and NEXT_STATUSES.
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import {
-  ApiError, API_BASE, formatPkr, getOrder, getPlan, getStats, NEXT_STATUSES,
+  ApiError, API_BASE, formatPkr, getCsvPreview, getOrder, getPlan, getStats, NEXT_STATUSES,
 } from './api';
 
 function mockFetch(ok: boolean, status: number, body: string) {
@@ -71,6 +71,63 @@ describe('ApiError mapping', () => {
       `${API_BASE}/delivery/plan?source=Lahore&destination=Karachi&dataset=production`,
       expect.anything(),
     );
+  });
+});
+
+describe('getCsvPreview ("How CSV becomes orders")', () => {
+  beforeEach(() => { vi.stubGlobal('fetch', mockFetch(true, 200, '{}')); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it('calls the fixed endpoint with no query string (no file selection)', async () => {
+    const fetchMock = mockFetch(true, 200, '{"available":true,"rows":[]}');
+    vi.stubGlobal('fetch', fetchMock);
+    await getCsvPreview();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${API_BASE}/orders/csv-preview`,
+      expect.anything(),
+    );
+  });
+
+  it('passes an available preview through unchanged', async () => {
+    const body = JSON.stringify({
+      available: true,
+      path: 'data/runtime/orders.csv',
+      header: 'order_id,customer_name,product,category,price_pkr,quantity,order_date,city,status',
+      rows: ['1001,Ahmed Raza,Wireless Headphones,Electronics,4500,1,2026-10-01,Lahore,Delivered'],
+      preview_rows: 1,
+      total_rows: 30,
+      truncated: true,
+    });
+    vi.stubGlobal('fetch', mockFetch(true, 200, body));
+    const pv = await getCsvPreview();
+    expect(pv.available).toBe(true);
+    expect(pv.path).toBe('data/runtime/orders.csv');
+    expect(pv.rows[0]).toContain('1001,Ahmed Raza');
+    expect(pv.total_rows).toBe(30);
+    expect(pv.truncated).toBe(true);
+  });
+
+  it('passes an unavailable (missing file) preview through with its message', async () => {
+    const body = JSON.stringify({
+      available: false,
+      path: 'data/runtime/orders.csv',
+      header: '',
+      rows: [],
+      preview_rows: 0,
+      total_rows: 0,
+      truncated: false,
+      message: 'The runtime orders.csv was not found or could not be read.',
+    });
+    vi.stubGlobal('fetch', mockFetch(true, 200, body));
+    const pv = await getCsvPreview();
+    expect(pv.available).toBe(false);
+    expect(pv.rows).toEqual([]);
+    expect(pv.message).toContain('not found');
+  });
+
+  it('turns a backend error into an ApiError like every other call', async () => {
+    vi.stubGlobal('fetch', mockFetch(false, 500, '{}'));
+    await expect(getCsvPreview()).rejects.toThrow('Request failed (HTTP 500).');
   });
 });
 

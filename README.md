@@ -45,6 +45,7 @@ Built as a **Data Structures and Algorithms semester project** for the BS Artifi
 | Delivery planning | Calculate the fastest route, detour costs and exact stop ordering |
 | Trip management | Assign Processing orders, complete trips and cancel Planned trips |
 | DSA visualizations | Show tree structure, queue state and search node-visit comparisons |
+| "How CSV becomes orders" view | On the Orders page: a diagram of the real load/save flow, a bounded preview of the actual runtime `orders.csv`, and a per-order inspector (parsed fields, linked-list position, queue membership, BST membership). Read-only; status changes still go through the normal controls |
 
 ## Screenshots
 
@@ -53,6 +54,15 @@ These screenshots come from the Windows demonstration documented in the finalize
 ### Order management
 
 ![Orders page filtered to five Pending orders](docs/screenshots/orders.png)
+
+<details>
+<summary><strong>"How CSV becomes orders" view (added after the finalized report)</strong></summary>
+
+The Orders page panel shows the real load/save flow, a bounded preview of the actual runtime `orders.csv` (first 10 data rows, read fresh from disk by `GET /api/orders/csv-preview`), and one order's parsed fields with its linked-list, queue and BST roles. Changing a status through the normal table controls refreshes the preview, so the saved row change is visible in the file text. This capture was taken on a Linux VM against an isolated copy of the sample data; it is not part of the Windows session in the finalized report.
+
+![How CSV becomes orders panel: flow diagram, live orders.csv preview with the just-changed row highlighted, and the order inspector](docs/screenshots/csv-to-orders.png)
+
+</details>
 
 <details>
 <summary><strong>Order details and delivery history</strong></summary>
