@@ -1,10 +1,13 @@
 // csvView.ts — pure helpers for the "How CSV becomes orders"
-// educational view on the Orders page. No fetching here: these
-// functions only interpret data the existing API endpoints already
-// return (the CSV preview, the order list in linked-list order, the
-// queue front -> rear, and the whole Order BST). Kept separate so
-// they can be unit-tested without a backend.
-import type { Order, OrderStatus, OrderTreeNode } from './api';
+// educational view on the Orders page. No direct fetching here:
+// these functions only interpret data the existing API endpoints
+// already return (the CSV preview, the order list in linked-list
+// order, the queue front -> rear, and the whole Order BST). The one
+// loader at the bottom (loadPanelData) takes its fetch functions as
+// injected dependencies, so it too can be unit-tested without a
+// backend — including with deferred promises that finish out of
+// order. Kept separate so everything can be tested in isolation.
+import type { CsvPreview, Order, OrderStatus, OrderTree, OrderTreeNode } from './api';
 
 /**
  * The order ID of one raw CSV data line (its first comma-separated
@@ -82,11 +85,17 @@ export function rowStatus(row: string): string | null {
  * controls, as the educational panel reports it. One record covers
  * every mutation kind, so a later action always replaces — never
  * contradicts — the report of an earlier one.
+ *
+ * A deletion also records whether the order's row was actually
+ * shown in the displayed (bounded) preview before the delete:
+ * only then can a refreshed preview verify the row's absence. A
+ * row beyond the preview was never visible, so its removal cannot
+ * be claimed from the preview.
  */
 export type LastChange =
   | { kind: 'status'; id: number; from: OrderStatus; to: OrderStatus }
   | { kind: 'cancelled'; id: number }
-  | { kind: 'deleted'; id: number }
+  | { kind: 'deleted'; id: number; wasInPreview: boolean }
   | { kind: 'created'; id: number };
 
 /** What the panel currently knows about the on-disk file preview. */
@@ -142,9 +151,16 @@ export function lastChangeMessage(change: LastChange, state: PreviewState): stri
   }
   const row = previewRowFor(state.rows, change.id);
   if (change.kind === 'deleted') {
-    return row
-      ? `${base} The preview above was refreshed, but a row for Order #${change.id} is still shown — refresh again to re-check.`
-      : `${base} The preview above was refreshed — Order #${change.id}'s row is no longer in the file.`;
+    if (row) {
+      return `${base} The preview above was refreshed, but a row for Order #${change.id} is still shown — refresh again to re-check.`;
+    }
+    // Absence from the refreshed preview only verifies the removal
+    // when the row was actually shown before the delete. A row
+    // beyond the bounded preview was never visible, so the preview
+    // cannot verify anything about it — say exactly that instead.
+    return change.wasInPreview
+      ? `${base} The preview above was refreshed — Order #${change.id}'s row, which was shown in the preview before the delete, is no longer in the file.`
+      : `${base} The delete succeeded through the API. Order #${change.id}'s row was not shown in the preview before the delete — the preview covers only the first ${state.previewRows} rows — so it cannot show the removal.`;
   }
   if (row) {
     const status = rowStatus(row);
@@ -156,4 +172,81 @@ export function lastChangeMessage(change: LastChange, state: PreviewState): stri
     return `${base} The preview above was refreshed — the new row is appended at the end of the file, beyond the first ${state.previewRows} rows shown.`;
   }
   return `${base} The preview above was refreshed — this order's row is beyond the first ${state.previewRows} rows shown, so it is not visible in the preview.`;
+}
+
+// ---- Panel loading coordination (out-of-order safety) ----
+
+/** The four read-endpoint results the educational panel displays. */
+export interface PanelData {
+  preview: CsvPreview;
+  orders: Order[];
+  queue: Order[];
+  tree: OrderTree;
+}
+
+/**
+ * The read endpoints loadPanelData needs, injected so the loader
+ * can be unit-tested with deferred promises instead of a backend.
+ * In the app these are the real functions from api.ts.
+ */
+export interface PanelFetchers {
+  getCsvPreview: () => Promise<CsvPreview>;
+  getOrders: () => Promise<Order[]>;
+  getQueue: () => Promise<Order[]>;
+  getOrderTree: () => Promise<OrderTree>;
+}
+
+/**
+ * Generation guard for panel loads. Every load start (begin) and
+ * every mutation (invalidate) bumps the generation, so only the
+ * newest request may apply its result. A response that arrives
+ * after a newer load or mutation started is stale and must be
+ * discarded entirely — it may not overwrite newer rows, clear the
+ * stale flag, or produce a "refreshed" claim.
+ */
+export class PanelRequestGuard {
+  private generation = 0;
+
+  /** Start a new load; returns the token to present on completion. */
+  begin(): number {
+    this.generation += 1;
+    return this.generation;
+  }
+
+  /** Invalidate any in-flight load (call on every mutation). */
+  invalidate(): void {
+    this.generation += 1;
+  }
+
+  /** True only while no newer load or mutation has started. */
+  isCurrent(token: number): boolean {
+    return token === this.generation;
+  }
+}
+
+/**
+ * Fetch the four panel datasets and apply them — but only if this
+ * load is still the newest when the responses arrive. If a newer
+ * load or a mutation started meanwhile, the whole response is
+ * discarded ('discarded') and `apply` is never called, so stale
+ * rows can never overwrite newer ones and a stale response can
+ * never claim the preview was refreshed. Fetch errors propagate
+ * to the caller, which gates its error/loading UI on the same
+ * token (guard.isCurrent(token)).
+ */
+export async function loadPanelData(
+  fetchers: PanelFetchers,
+  guard: PanelRequestGuard,
+  token: number,
+  apply: (data: PanelData) => void,
+): Promise<'applied' | 'discarded'> {
+  const [preview, orders, queue, tree] = await Promise.all([
+    fetchers.getCsvPreview(),
+    fetchers.getOrders(),
+    fetchers.getQueue(),
+    fetchers.getOrderTree(),
+  ]);
+  if (!guard.isCurrent(token)) return 'discarded';
+  apply({ preview, orders, queue, tree });
+  return 'applied';
 }

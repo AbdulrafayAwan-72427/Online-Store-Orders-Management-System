@@ -6,7 +6,7 @@ import {
   type CsvPreview, type NewOrder, type Order, type OrderDetail, type OrderStatus, type OrderTree,
 } from '../lib/api';
 import {
-  changedRowId, lastChangeMessage, listPosition, parseCsvRowId, previewRowFor, queueNote, treeContains,
+  PanelRequestGuard, changedRowId, lastChangeMessage, listPosition, loadPanelData, parseCsvRowId, previewRowFor, queueNote, treeContains,
   type LastChange, type PreviewState,
 } from '../lib/csvView';
 import { ConfirmDialog, EmptyState, ErrorBanner, Modal, Spinner, StatusBadge, buttonPrimary, buttonSecondary, errorMessage, inputClass } from '../components/ui';
@@ -112,36 +112,49 @@ export default function Orders() {
   // the panel must not claim a refresh (or highlight a row) until
   // the file has actually been re-read successfully.
   const [previewStale, setPreviewStale] = useState(true);
-  const mutationGen = useRef(0);
+  // Generation guard for panel loads: every load start and every
+  // mutation bumps the generation, so only the newest request may
+  // apply its result. A response that arrives after a newer load
+  // or mutation started is discarded entirely (see loadPanelData
+  // in csvView.ts) — it must not overwrite newer rows, clear the
+  // stale flag, or produce a "refreshed" message.
+  const panelGuard = useRef(new PanelRequestGuard());
 
   // Record a successful mutation for the panel: it replaces any
-  // earlier "last change" report and marks the preview stale until
-  // the file has been successfully re-read.
+  // earlier "last change" report, invalidates any in-flight panel
+  // load, and marks the preview stale until the file has been
+  // successfully re-read.
   const noteMutation = useCallback((change: LastChange) => {
-    mutationGen.current += 1;
+    panelGuard.current.invalidate();
     setPreviewStale(true);
     setLastChange(change);
   }, []);
 
   const loadPanel = useCallback(async () => {
-    const gen = mutationGen.current;
+    const token = panelGuard.current.begin();
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const [pv, all, queue, tree] = await Promise.all([
-        getCsvPreview(), getOrders(), getQueue(), getOrderTree(),
-      ]);
-      setPreview(pv);
-      setPanelOrders(all);
-      setPanelQueue(queue);
-      setPanelTree(tree);
-      // The preview is fresh only if no newer mutation happened
-      // while this read was in flight.
-      if (mutationGen.current === gen) setPreviewStale(false);
+      await loadPanelData(
+        { getCsvPreview, getOrders, getQueue, getOrderTree },
+        panelGuard.current,
+        token,
+        ({ preview: pv, orders: all, queue, tree }) => {
+          setPreview(pv);
+          setPanelOrders(all);
+          setPanelQueue(queue);
+          setPanelTree(tree);
+          setPreviewStale(false);
+        },
+      );
+      // If the load was discarded as stale, nothing above ran: the
+      // newer request (or the mutation's own refresh) owns the
+      // panel state, the stale flag, and the loading indicator.
     } catch (e) {
+      if (!panelGuard.current.isCurrent(token)) return; // stale: discard silently
       setPreviewError(errorMessage(e, 'Could not load the CSV preview.'));
     } finally {
-      setPreviewLoading(false);
+      if (panelGuard.current.isCurrent(token)) setPreviewLoading(false);
     }
   }, []);
 
@@ -312,7 +325,16 @@ export default function Orders() {
       } else {
         await deleteOrder(order.id);
         setNotice(`Order #${order.id} deleted.`);
-        noteMutation({ kind: 'deleted', id: order.id });
+        noteMutation({
+          kind: 'deleted',
+          id: order.id,
+          // Was this order's row actually shown in the preview the
+          // user is looking at? Only then can the refreshed
+          // preview verify its absence; a row beyond the bounded
+          // preview was never visible (see lastChangeMessage).
+          wasInPreview:
+            preview !== null && preview.available && previewRowFor(preview.rows, order.id) !== null,
+        });
         // The inspected order is gone: clear the selection instead
         // of leaving its stale details on screen.
         if (selectedId === order.id) {
