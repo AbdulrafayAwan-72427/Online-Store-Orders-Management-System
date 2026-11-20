@@ -2,12 +2,13 @@
 // educational view on the Orders page. No direct fetching here:
 // these functions only interpret data the existing API endpoints
 // already return (the CSV preview, the order list in linked-list
-// order, the queue front -> rear, and the whole Order BST). The one
-// loader at the bottom (loadPanelData) takes its fetch functions as
-// injected dependencies, so it too can be unit-tested without a
-// backend — including with deferred promises that finish out of
-// order. Kept separate so everything can be tested in isolation.
-import type { CsvPreview, Order, OrderStatus, OrderTree, OrderTreeNode } from './api';
+// order, the queue front -> rear, and the whole Order BST). The two
+// loaders at the bottom (loadPanelData, loadSelectionData) take
+// their fetch functions as injected dependencies, so they too can
+// be unit-tested without a backend — including with deferred
+// promises that finish out of order. Kept separate so everything
+// can be tested in isolation.
+import type { CsvPreview, Order, OrderDetail, OrderStatus, OrderTree, OrderTreeNode } from './api';
 
 /**
  * The order ID of one raw CSV data line (its first comma-separated
@@ -248,5 +249,76 @@ export async function loadPanelData(
   ]);
   if (!guard.isCurrent(token)) return 'discarded';
   apply({ preview, orders, queue, tree });
+  return 'applied';
+}
+
+// ---- Selection loading coordination (out-of-order safety) ----
+
+/**
+ * Generation guard for inspector detail loads (GET /api/orders/:id).
+ * It tracks both a generation counter and the currently selected
+ * order ID, because a detail response may be applied only when
+ * BOTH still hold on arrival: no newer selection request has
+ * started, and its order is still the selected one. Selection
+ * changes are reported synchronously (selectionChanged) at the
+ * moment the user picks another order, clears the selection, or
+ * the selected order is deleted — so a response already in flight
+ * for the previous selection is stale from that instant, even
+ * before the next request begins.
+ */
+export class SelectionRequestGuard {
+  private generation = 0;
+  private selectedId: number | null = null;
+
+  /** Start a detail request for `id`; returns the token to present on completion. */
+  begin(id: number): number {
+    this.generation += 1;
+    this.selectedId = id;
+    return this.generation;
+  }
+
+  /**
+   * The selection changed: another order was picked, the selection
+   * was cleared (null), or the selected order was deleted. Any
+   * detail request started earlier is stale from now on, so its
+   * late response cannot repopulate the inspector. Re-selecting
+   * the order that is already selected is a no-op, so an
+   * in-flight request for it survives.
+   */
+  selectionChanged(id: number | null): void {
+    if (id === this.selectedId) return;
+    this.generation += 1;
+    this.selectedId = id;
+  }
+
+  /**
+   * True only while no newer selection request has started AND
+   * `id` is still the selected order.
+   */
+  isCurrent(token: number, id: number): boolean {
+    return token === this.generation && this.selectedId === id;
+  }
+}
+
+/**
+ * Fetch one order's detail and apply it — but only if this
+ * request is still the newest AND its order is still selected
+ * when the response arrives. Otherwise the whole response is
+ * discarded ('discarded') and `apply` is never called, so a late
+ * response for a previously selected order can never overwrite
+ * the inspector's current order. Fetch errors propagate to the
+ * caller, which gates its error/loading UI on the same token
+ * (guard.isCurrent(token, id)).
+ */
+export async function loadSelectionData(
+  fetchDetail: (id: number) => Promise<OrderDetail>,
+  guard: SelectionRequestGuard,
+  token: number,
+  id: number,
+  apply: (detail: OrderDetail) => void,
+): Promise<'applied' | 'discarded'> {
+  const detail = await fetchDetail(id);
+  if (!guard.isCurrent(token, id)) return 'discarded';
+  apply(detail);
   return 'applied';
 }

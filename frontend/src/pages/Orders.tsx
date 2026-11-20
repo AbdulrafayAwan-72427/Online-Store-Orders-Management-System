@@ -6,7 +6,7 @@ import {
   type CsvPreview, type NewOrder, type Order, type OrderDetail, type OrderStatus, type OrderTree,
 } from '../lib/api';
 import {
-  PanelRequestGuard, changedRowId, lastChangeMessage, listPosition, loadPanelData, parseCsvRowId, previewRowFor, queueNote, treeContains,
+  PanelRequestGuard, SelectionRequestGuard, changedRowId, lastChangeMessage, listPosition, loadPanelData, loadSelectionData, parseCsvRowId, previewRowFor, queueNote, treeContains,
   type LastChange, type PreviewState,
 } from '../lib/csvView';
 import { ConfirmDialog, EmptyState, ErrorBanner, Modal, Spinner, StatusBadge, buttonPrimary, buttonSecondary, errorMessage, inputClass } from '../components/ui';
@@ -119,6 +119,14 @@ export default function Orders() {
   // in csvView.ts) — it must not overwrite newer rows, clear the
   // stale flag, or produce a "refreshed" message.
   const panelGuard = useRef(new PanelRequestGuard());
+  // Generation guard for inspector detail loads: a response is
+  // applied only while no newer selection request has started AND
+  // its order is still selected (see loadSelectionData in
+  // csvView.ts). Selection changes are reported to the guard
+  // synchronously (changeSelection below), so a late response for
+  // a previously selected — or deleted — order is discarded
+  // instead of repopulating the inspector.
+  const selectionGuard = useRef(new SelectionRequestGuard());
 
   // Record a successful mutation for the panel: it replaces any
   // earlier "last change" report, invalidates any in-flight panel
@@ -158,16 +166,37 @@ export default function Orders() {
     }
   }, []);
 
+  // Change (or clear) the inspected order. The guard is told
+  // synchronously, so a detail response already in flight for the
+  // previous selection is stale from this moment and cannot
+  // repopulate the inspector when it arrives late.
+  const changeSelection = (id: number | null) => {
+    selectionGuard.current.selectionChanged(id);
+    setSelectedId(id);
+    if (id === null) {
+      setSelDetail(null);
+      setSelError(null);
+      setSelLoading(false);
+    }
+  };
+
   const loadSelection = useCallback(async (id: number) => {
+    const token = selectionGuard.current.begin(id);
     setSelLoading(true);
     setSelError(null);
     try {
-      setSelDetail(await getOrder(id));
+      await loadSelectionData(getOrder, selectionGuard.current, token, id, (detail) => {
+        setSelDetail(detail);
+      });
+      // If the response was discarded as stale, nothing above ran:
+      // the newer selection (or its own load) owns the inspector,
+      // the error banner, and the loading indicator.
     } catch (e) {
+      if (!selectionGuard.current.isCurrent(token, id)) return; // stale: discard silently
       setSelDetail(null);
       setSelError(errorMessage(e, 'Could not load that order.'));
     } finally {
-      setSelLoading(false);
+      if (selectionGuard.current.isCurrent(token, id)) setSelLoading(false);
     }
   }, []);
 
@@ -336,10 +365,11 @@ export default function Orders() {
             preview !== null && preview.available && previewRowFor(preview.rows, order.id) !== null,
         });
         // The inspected order is gone: clear the selection instead
-        // of leaving its stale details on screen.
+        // of leaving its stale details on screen. changeSelection
+        // also invalidates any detail request still in flight for
+        // it, so a late response cannot repopulate the inspector.
         if (selectedId === order.id) {
-          setSelectedId(null);
-          setSelDetail(null);
+          changeSelection(null);
         }
       }
       setConfirm(null);
@@ -467,7 +497,7 @@ export default function Orders() {
                         return (
                           <button
                             key={row}
-                            onClick={() => { if (rowId !== null) setSelectedId(rowId); }}
+                            onClick={() => { if (rowId !== null) changeSelection(rowId); }}
                             aria-label={rowId !== null ? `Inspect order ${rowId}` : 'Inspect this row'}
                             className={`block w-full rounded px-2 py-1 text-left font-mono text-xs hover:bg-slate-200 dark:hover:bg-slate-700 ${
                               isSelected ? 'bg-emerald-100 dark:bg-emerald-900/40' : isChanged ? 'bg-amber-100 dark:bg-amber-900/40' : ''
@@ -496,7 +526,7 @@ export default function Orders() {
                 Pick an order (or click a row in the file preview above)
                 <select
                   value={selectedId ?? ''}
-                  onChange={(e) => setSelectedId(e.target.value ? Number(e.target.value) : null)}
+                  onChange={(e) => changeSelection(e.target.value ? Number(e.target.value) : null)}
                   className={inputClass}
                   aria-label="Pick an order to inspect"
                 >
