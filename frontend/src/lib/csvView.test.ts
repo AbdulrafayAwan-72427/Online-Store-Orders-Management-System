@@ -2,7 +2,10 @@
 // "How CSV becomes orders" panel (src/lib/csvView.ts). No backend
 // needed: the helpers only interpret API-shaped data.
 import { describe, expect, it } from 'vitest';
-import { listPosition, parseCsvRowId, previewRowFor, queueNote, treeContains } from './csvView';
+import {
+  changedRowId, lastChangeMessage, listPosition, parseCsvRowId, previewRowFor, queueNote, rowStatus, treeContains,
+  type LastChange, type PreviewState,
+} from './csvView';
 import type { Order, OrderTreeNode } from './api';
 
 function order(id: number, status: Order['status']): Order {
@@ -106,5 +109,127 @@ describe('previewRowFor', () => {
   it('returns null for an order beyond the preview', () => {
     expect(previewRowFor(rows, 1030)).toBeNull();
     expect(previewRowFor([], 1001)).toBeNull();
+  });
+});
+
+describe('rowStatus', () => {
+  it('reads the status from the 9th column, like parseOrder', () => {
+    expect(rowStatus('1006,Sana Iqbal,Handbag,Accessories,5400,1,2026-10-03,Faisalabad,Processing')).toBe('Processing');
+    expect(rowStatus('1001,Ahmed Raza,Wireless Headphones,Electronics,4500,1,2026-10-01,Lahore,Delivered')).toBe('Delivered');
+  });
+
+  it('returns null for a short or empty row', () => {
+    expect(rowStatus('1006,Sana Iqbal')).toBeNull();
+    expect(rowStatus('')).toBeNull();
+  });
+});
+
+describe('changedRowId', () => {
+  const fresh: PreviewState = { refreshed: true, available: true, rows: [], previewRows: 10 };
+  const stale: PreviewState = { refreshed: false, available: true, rows: [], previewRows: 10 };
+  const unavailable: PreviewState = { refreshed: true, available: false, rows: [], previewRows: 10 };
+
+  it('highlights the changed row only after a successful refresh', () => {
+    const change: LastChange = { kind: 'status', id: 1006, from: 'Pending', to: 'Processing' };
+    expect(changedRowId(change, fresh)).toBe(1006);
+    expect(changedRowId(change, stale)).toBeNull();
+    expect(changedRowId(change, unavailable)).toBeNull();
+  });
+
+  it('highlights cancelled and created orders after a refresh', () => {
+    expect(changedRowId({ kind: 'cancelled', id: 1006 }, fresh)).toBe(1006);
+    expect(changedRowId({ kind: 'created', id: 1031 }, fresh)).toBe(1031);
+  });
+
+  it('never highlights a deleted order or a missing change record', () => {
+    expect(changedRowId({ kind: 'deleted', id: 1006 }, fresh)).toBeNull();
+    expect(changedRowId(null, fresh)).toBeNull();
+  });
+});
+
+describe('lastChangeMessage', () => {
+  const row1006 = (status: string) =>
+    `1006,Sana Iqbal,Handbag,Accessories,5400,1,2026-10-03,Faisalabad,${status}`;
+  const state = (over: Partial<PreviewState>): PreviewState => ({
+    refreshed: true, available: true, rows: [row1006('Processing')], previewRows: 10, ...over,
+  });
+
+  it('states the final status read from the refreshed row itself', () => {
+    const msg = lastChangeMessage(
+      { kind: 'status', id: 1006, from: 'Pending', to: 'Processing' },
+      state({}),
+    );
+    expect(msg).toContain('Order #1006 Pending → Processing');
+    expect(msg).toContain('was refreshed');
+    expect(msg).toContain('now ends with ,Processing');
+  });
+
+  it('reads the row even when it disagrees with the requested status', () => {
+    // A later cancel rewrote the row: the message must follow the
+    // file, not the earlier requested transition.
+    const msg = lastChangeMessage(
+      { kind: 'status', id: 1006, from: 'Pending', to: 'Processing' },
+      state({ rows: [row1006('Cancelled')] }),
+    );
+    expect(msg).toContain('now ends with ,Cancelled');
+    expect(msg).not.toContain('now ends with ,Processing');
+  });
+
+  it('does not claim a refresh before one has succeeded', () => {
+    const msg = lastChangeMessage(
+      { kind: 'status', id: 1006, from: 'Pending', to: 'Processing' },
+      state({ refreshed: false }),
+    );
+    expect(msg).toContain('has not been refreshed yet');
+    expect(msg).not.toContain('was refreshed');
+    expect(msg).not.toContain('now ends with');
+  });
+
+  it('reports a cancellation from the refreshed row', () => {
+    const msg = lastChangeMessage(
+      { kind: 'cancelled', id: 1006 },
+      state({ rows: [row1006('Cancelled')] }),
+    );
+    expect(msg).toContain('Order #1006 cancelled');
+    expect(msg).toContain('now ends with ,Cancelled');
+  });
+
+  it('reports a deletion as the row no longer being in the file', () => {
+    const msg = lastChangeMessage(
+      { kind: 'deleted', id: 1006 },
+      state({ rows: ['1001,Ahmed Raza,Wireless Headphones,Electronics,4500,1,2026-10-01,Lahore,Delivered'] }),
+    );
+    expect(msg).toContain('Order #1006 deleted');
+    expect(msg).toContain('no longer in the file');
+  });
+
+  it('does not claim a refresh for a deletion that has not been re-read', () => {
+    const msg = lastChangeMessage({ kind: 'deleted', id: 1006 }, state({ refreshed: false }));
+    expect(msg).toContain('has not been refreshed yet');
+    expect(msg).not.toContain('no longer in the file');
+  });
+
+  it('says honestly when the row is beyond the bounded preview', () => {
+    const msg = lastChangeMessage(
+      { kind: 'status', id: 1030, from: 'Pending', to: 'Processing' },
+      state({}),
+    );
+    expect(msg).toContain('beyond the first 10 rows');
+    expect(msg).not.toContain('now ends with');
+  });
+
+  it('explains a created order whose row is at the end of the file', () => {
+    const msg = lastChangeMessage({ kind: 'created', id: 1031 }, state({}));
+    expect(msg).toContain('Order #1031 created (Pending)');
+    expect(msg).toContain('appended at the end of the file');
+  });
+
+  it('says the file could not be re-read when it is unavailable', () => {
+    const msg = lastChangeMessage(
+      { kind: 'status', id: 1006, from: 'Pending', to: 'Processing' },
+      state({ available: false, rows: [] }),
+    );
+    expect(msg).toContain('could not be re-read');
+    expect(msg).not.toContain('now ends with');
   });
 });

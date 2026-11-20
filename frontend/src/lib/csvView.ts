@@ -4,7 +4,7 @@
 // return (the CSV preview, the order list in linked-list order, the
 // queue front -> rear, and the whole Order BST). Kept separate so
 // they can be unit-tested without a backend.
-import type { Order, OrderTreeNode } from './api';
+import type { Order, OrderStatus, OrderTreeNode } from './api';
 
 /**
  * The order ID of one raw CSV data line (its first comma-separated
@@ -65,4 +65,95 @@ export function queueNote(order: Order, queue: Order[]): string {
  */
 export function previewRowFor(rows: string[], id: number): string | null {
   return rows.find((r) => parseCsvRowId(r) === id) ?? null;
+}
+
+/**
+ * The status field (9th comma-separated column) of one raw CSV
+ * data row, or null when the row has fewer fields. Mirrors the
+ * backend's parseOrder, which reads the status from column 9.
+ */
+export function rowStatus(row: string): string | null {
+  const s = row.split(',')[8]?.trim();
+  return s ? s : null;
+}
+
+/**
+ * The most recent successful mutation made through the Orders page
+ * controls, as the educational panel reports it. One record covers
+ * every mutation kind, so a later action always replaces — never
+ * contradicts — the report of an earlier one.
+ */
+export type LastChange =
+  | { kind: 'status'; id: number; from: OrderStatus; to: OrderStatus }
+  | { kind: 'cancelled'; id: number }
+  | { kind: 'deleted'; id: number }
+  | { kind: 'created'; id: number };
+
+/** What the panel currently knows about the on-disk file preview. */
+export interface PreviewState {
+  /**
+   * True only when the displayed preview was successfully re-read
+   * after the change was made. A stale preview still shows the old
+   * rows and must not be described as refreshed.
+   */
+  refreshed: boolean;
+  /** False when the runtime file could not be read. */
+  available: boolean;
+  /** Raw data rows currently displayed (the bounded preview). */
+  rows: string[];
+  /** How many data rows the bounded preview shows. */
+  previewRows: number;
+}
+
+/**
+ * The order ID whose preview row should carry the "(just changed)"
+ * highlight, or null. The highlight appears only when the preview
+ * was successfully refreshed after the change — highlighting a
+ * stale row would contradict the file. A deleted order has no row
+ * left to highlight.
+ */
+export function changedRowId(change: LastChange | null, state: PreviewState): number | null {
+  if (!change || change.kind === 'deleted') return null;
+  if (!state.refreshed || !state.available) return null;
+  return change.id;
+}
+
+/**
+ * The one-line "last change" report shown under the file preview.
+ * It claims the preview was refreshed only when it actually was,
+ * and any final status it states is read from the refreshed row
+ * itself — never assumed from the action that was requested.
+ */
+export function lastChangeMessage(change: LastChange, state: PreviewState): string {
+  const base =
+    change.kind === 'status'
+      ? `Last change through the controls on this page: Order #${change.id} ${change.from} → ${change.to}.`
+      : change.kind === 'cancelled'
+        ? `Last change through the controls on this page: Order #${change.id} cancelled.`
+        : change.kind === 'deleted'
+          ? `Last change through the controls on this page: Order #${change.id} deleted.`
+          : `Last change through the controls on this page: Order #${change.id} created (Pending).`;
+
+  if (!state.refreshed) {
+    return `${base} The backend rewrote orders.csv, but the preview above has not been refreshed yet, so it may not show the saved row — use Refresh preview.`;
+  }
+  if (!state.available) {
+    return `${base} The preview above could not be re-read (the runtime file is unavailable), so the saved row cannot be shown here.`;
+  }
+  const row = previewRowFor(state.rows, change.id);
+  if (change.kind === 'deleted') {
+    return row
+      ? `${base} The preview above was refreshed, but a row for Order #${change.id} is still shown — refresh again to re-check.`
+      : `${base} The preview above was refreshed — Order #${change.id}'s row is no longer in the file.`;
+  }
+  if (row) {
+    const status = rowStatus(row);
+    return status
+      ? `${base} The preview above was refreshed — the highlighted row now ends with ,${status}.`
+      : `${base} The preview above was refreshed — the highlighted row is Order #${change.id}'s saved row.`;
+  }
+  if (change.kind === 'created') {
+    return `${base} The preview above was refreshed — the new row is appended at the end of the file, beyond the first ${state.previewRows} rows shown.`;
+  }
+  return `${base} The preview above was refreshed — this order's row is beyond the first ${state.previewRows} rows shown, so it is not visible in the preview.`;
 }
