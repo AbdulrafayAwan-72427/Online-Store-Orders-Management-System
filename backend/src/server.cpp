@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -449,6 +450,68 @@ int main(int argc, char *argv[]) {
             {"root", orderNodeToJson(store.orderTree.root)},
             {"size", store.report().total},
             {"height", orderTreeHeight(store.orderTree.root)},
+        });
+    });
+
+    // Educational view — "How CSV becomes orders" (Orders page).
+    // A bounded, read-only preview of the ACTUAL runtime orders file:
+    // the same store.ordersPath that loadOrders() reads at startup and
+    // that every successful mutation rewrites (atomically, tmp+rename).
+    // The path comes ONLY from the server configuration (argv data
+    // dir); the client cannot supply a path, filename, or any input
+    // that selects a file, so this cannot be used to read other files.
+    // Registered BEFORE /api/orders/:id for the same reason as
+    // /api/orders/tree. Read under the mutex: a mutation could be
+    // mid-save (saves are atomic, so a reader sees the old file or the
+    // new file whole, never a half-written one).
+    // Missing/unreadable file -> HTTP 200 with available:false and a
+    // message: this is a best-effort teaching preview, the server
+    // keeps running, and the orders already loaded in memory are
+    // unaffected (the next successful change recreates the file).
+    svr.Get("/api/orders/csv-preview", [&](const httplib::Request &, httplib::Response &res) {
+        std::lock_guard<std::mutex> lock(mu);
+        const int kMaxRows = 10;          // data rows returned, max
+        const size_t kMaxLine = 2000;     // characters per line, max
+        auto clip = [&](std::string s) {
+            if (!s.empty() && s.back() == '\r') s.pop_back(); // CRLF files
+            if (s.size() > kMaxLine) s = s.substr(0, kMaxLine);
+            return s;
+        };
+        std::ifstream in(store.ordersPath);
+        if (!in) {
+            sendJson(res, 200, json{
+                {"available", false},
+                {"path", store.ordersPath},
+                {"header", ""},
+                {"rows", json::array()},
+                {"preview_rows", 0},
+                {"total_rows", 0},
+                {"truncated", false},
+                {"message", "The runtime orders.csv was not found or could not be read. "
+                            "The orders already loaded in memory are unaffected; the file "
+                            "is rewritten by the next successful change."},
+            });
+            return;
+        }
+        std::string line;
+        std::string header;
+        if (!std::getline(in, header)) header = "";
+        header = clip(header);
+        json rows = json::array();
+        long long total = 0;
+        while (std::getline(in, line)) {
+            if (line.empty() || line == "\r") continue;
+            total++;
+            if ((int)rows.size() < kMaxRows) rows.push_back(clip(line));
+        }
+        sendJson(res, 200, json{
+            {"available", true},
+            {"path", store.ordersPath},
+            {"header", header},
+            {"rows", rows},
+            {"preview_rows", (int)rows.size()},
+            {"total_rows", total},
+            {"truncated", total > (long long)rows.size()},
         });
     });
 

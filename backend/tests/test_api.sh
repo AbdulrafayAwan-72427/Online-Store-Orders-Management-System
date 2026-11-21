@@ -78,6 +78,16 @@ check "get order 1024 (BST search)" 200 "$CODE" "$BODY" '"customer_name":"Waqas 
 BODY=$(curl -s -w "\n%{http_code}" "$BASE/orders/9999"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
 check "get missing order 9999 -> 404" 404 "$CODE" "$BODY" 'not found'
 
+# CSV preview ("How CSV becomes orders"): the file is still pristine
+# here (no mutation has run yet), so the preview must match the sample.
+BODY=$(curl -s -w "\n%{http_code}" "$BASE/orders/csv-preview"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
+check "csv-preview returns 200 available" 200 "$CODE" "$BODY" '"available":true'
+check "csv-preview header is the real CSV header" 200 "$CODE" "$BODY" '"header":"order_id,customer_name,product,category,price_pkr,quantity,order_date,city,status"'
+check "csv-preview first row is order 1001 raw text" 200 "$CODE" "$BODY" '"1001,Ahmed Raza,Wireless Headphones,Electronics,4500,1,2026-10-01,Lahore,Delivered"'
+pycheck "csv-preview bounded: 10 rows of 30, truncated, path is the configured file" 'import json,os; d=json.loads(os.environ["BODY"]); assert d["available"] is True and d["preview_rows"]==10 and len(d["rows"])==10 and d["total_rows"]==30 and d["truncated"] is True and d["path"].endswith("/orders.csv")'
+BODY=$(curl -s -w "\n%{http_code}" "$BASE/orders/csv-preview?path=/etc/passwd"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
+pycheck "csv-preview ignores a client-supplied path (fixed file only)" 'import json,os; d=json.loads(os.environ["BODY"]); assert d["path"].endswith("/orders.csv") and d["rows"][0].startswith("1001,")'
+
 # Create order: success + validation errors
 BODY=$(curl -s -w "\n%{http_code}" -X POST -H 'Content-Type: application/json' -d '{"customer_name":"API Test","product":"Test Item","category":"Electronics","price_pkr":5000,"quantity":2,"order_date":"2026-10-16","city":"Lahore"}' "$BASE/orders"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
 check "create order 1031" 201 "$CODE" "$BODY" '"id":1031'
@@ -101,6 +111,10 @@ BODY=$(curl -s -w "\n%{http_code}" -X POST "$BASE/undo"); CODE=$(echo "$BODY" | 
 check "undo process" 200 "$CODE" "$BODY" '"undone":true'
 BODY=$(curl -s -w "\n%{http_code}" -X POST "$BASE/orders/1006/cancel"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
 check "cancel 1006" 200 "$CODE" "$BODY" '"status":"Cancelled"'
+# The cancel rewrote orders.csv (1031 was created earlier, so 31 rows):
+# the preview must show the saved change in the raw file text.
+BODY=$(curl -s -w "\n%{http_code}" "$BASE/orders/csv-preview"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
+pycheck "csv-preview shows saved change: 1006 row now ends ,Cancelled, total 31" 'import json,os; d=json.loads(os.environ["BODY"]); row=[r for r in d["rows"] if r.startswith("1006,")]; assert row and row[0].endswith(",Cancelled") and d["total_rows"]==31'
 BODY=$(curl -s -w "\n%{http_code}" -X POST "$BASE/orders/1006/cancel"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
 check "cancel 1006 again -> 400" 400 "$CODE" "$BODY" 'error'
 
@@ -293,6 +307,32 @@ check "test dataset: create intermediate trip" 201 "$CODE" "$BODY" '"trip_id":1'
 BODY=$(curl -s -w "\n%{http_code}" -X POST "$BASE/delivery/trips/1/complete"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
 check "test dataset: complete intermediate trip" 200 "$CODE" "$BODY" '"status":"Completed"'
 stop_server
+
+echo "--- Phase 3: csv-preview with a missing runtime file ---"
+# Fresh isolated copy; delete orders.csv WHILE the server is running.
+# The preview must answer gracefully (200, available:false) and the
+# server must stay up; the next successful change recreates the file.
+DIR3=$(mktemp -d "$ROOT/build/api-test-missing.XXXXXX") || exit 1
+cp "$ROOT/data/sample/orders.csv" "$ROOT/data/sample/delivery_routes.csv" "$ROOT/data/test/test_routes_intermediate.csv" "$DIR3/"
+DIR="$DIR3"
+start_server
+BODY=$(curl -s -w "\n%{http_code}" "$BASE/orders/csv-preview"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
+check "phase 3: csv-preview available before delete" 200 "$CODE" "$BODY" '"available":true'
+rm -f "$DIR3/orders.csv"
+BODY=$(curl -s -w "\n%{http_code}" "$BASE/orders/csv-preview"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
+check "phase 3: missing file -> 200 (graceful, no crash)" 200 "$CODE" "$BODY" '"available":false'
+pycheck "phase 3: missing file -> message + empty rows" 'import json,os; d=json.loads(os.environ["BODY"]); assert d["available"] is False and d["rows"]==[] and d["total_rows"]==0 and "not found" in d["message"] and d["path"].endswith("/orders.csv")'
+BODY=$(curl -s -w "\n%{http_code}" "$BASE/health"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
+check "phase 3: server still alive after delete" 200 "$CODE" "$BODY" '"status":"ok"'
+BODY=$(curl -s -w "\n%{http_code}" "$BASE/orders"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
+check "phase 3: in-memory orders unaffected by delete" 200 "$CODE" "$BODY" '"id":1030'
+BODY=$(curl -s -w "\n%{http_code}" -X PATCH -H 'Content-Type: application/json' -d '{"status":"Processing"}' "$BASE/orders/1017/status"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
+check "phase 3: mutation after delete succeeds" 200 "$CODE" "$BODY" '"status":"Processing"'
+BODY=$(curl -s -w "\n%{http_code}" "$BASE/orders/csv-preview"); CODE=$(echo "$BODY" | tail -1); BODY=$(echo "$BODY" | head -n -1)
+check "phase 3: mutation recreated the file" 200 "$CODE" "$BODY" '"available":true'
+pycheck "phase 3: recreated file has all 30 rows again" 'import json,os; d=json.loads(os.environ["BODY"]); assert d["available"] is True and d["total_rows"]==30'
+stop_server
+rm -rf "$DIR3"
 
 echo ""
 echo "=== API integration test: $PASS passed, $FAIL failed ==="

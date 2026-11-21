@@ -227,6 +227,29 @@ export const cancelOrder = (id: number) =>
 export const deleteOrder = (id: number) =>
   request<{ deleted: number }>(`/orders/${id}`, { method: 'DELETE' });
 
+// ---- CSV preview ("How CSV becomes orders" educational view) ----
+
+/**
+ * GET /api/orders/csv-preview — a bounded, read-only preview of the
+ * ACTUAL runtime orders.csv the backend was started with. The file
+ * path is fixed by the server config; the client cannot select a
+ * file. `rows` are the raw first data lines of the file, as text.
+ * When the file is missing/unreadable the backend still answers 200
+ * with available:false and a message.
+ */
+export interface CsvPreview {
+  available: boolean;
+  path: string;
+  header: string;
+  rows: string[];
+  preview_rows: number;
+  total_rows: number;
+  truncated: boolean;
+  message?: string;
+}
+
+export const getCsvPreview = () => request<CsvPreview>('/orders/csv-preview');
+
 // ---- Queue / Undo (client functions for later phases; no UI wires them yet) ----
 
 export const getQueue = () => request<Order[]>('/queue');

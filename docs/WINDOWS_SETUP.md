@@ -54,7 +54,7 @@ From the root in Git Bash:
 bash backend/tests/test_api.sh
 ```
 
-The script starts its own server on port 18080 and copies the original fixtures into a temporary directory. It runs 93 checks and leaves runtime data untouched.
+The script starts its own server on port 18080 and copies the original fixtures into a temporary directory. It runs 107 checks and leaves runtime data untouched.
 
 From `frontend/`:
 

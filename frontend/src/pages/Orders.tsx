@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Eye, Plus, RotateCcw, Search, Trash2, XCircle } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowRight, ChevronDown, ChevronUp, Eye, FileText, Plus, RefreshCw, RotateCcw, Search, Trash2, XCircle } from 'lucide-react';
 import {
   ALL_STATUSES, CITIES, NEXT_STATUSES, cancelOrder, createOrder, deleteOrder, formatPkr,
-  getOrder, getOrders, updateOrderStatus,
-  type NewOrder, type Order, type OrderDetail, type OrderStatus,
+  getCsvPreview, getOrder, getOrders, getOrderTree, getQueue, updateOrderStatus,
+  type CsvPreview, type NewOrder, type Order, type OrderDetail, type OrderStatus, type OrderTree,
 } from '../lib/api';
+import {
+  PanelRequestGuard, SelectionRequestGuard, changedRowId, lastChangeMessage, listPosition, loadPanelData, loadSelectionData, parseCsvRowId, previewRowFor, queueNote, treeContains,
+  type LastChange, type PreviewState,
+} from '../lib/csvView';
 import { ConfirmDialog, EmptyState, ErrorBanner, Modal, Spinner, StatusBadge, buttonPrimary, buttonSecondary, errorMessage, inputClass } from '../components/ui';
 
 const EMPTY_FORM: NewOrder = {
@@ -16,6 +20,52 @@ const EMPTY_FORM: NewOrder = {
   order_date: new Date().toISOString().slice(0, 10),
   city: 'Lahore',
 };
+
+// The real backend flow, in two stages (Store::loadOrders on
+// startup, Store::saveAtomic on every successful change). The
+// three data structures are parallel branches from the parsed
+// orders — not a chain: loadOrders appends every order to the
+// linked list, enqueues only the Pending IDs, and builds the
+// Order BST from all the loaded orders. Kept in plain English for
+// teaching; the tree is the Order BST, not an AST.
+const LOAD_STEPS: { title: string; text: string }[] = [
+  { title: 'orders.csv row', text: 'One line of text in the runtime file on disk.' },
+  { title: 'parseOrder()', text: 'Splits the line on commas; converts order_id, price_pkr and quantity to numbers.' },
+  { title: 'Order', text: 'The in-memory object with the 9 parsed fields.' },
+];
+const LOAD_BRANCHES: { title: string; text: string }[] = [
+  { title: 'Linked List', text: 'Every parsed order is appended in file order — the source for listing orders and for saving.' },
+  { title: 'Processing Queue', text: 'Only if the status is Pending: the order ID joins the FIFO queue.' },
+  { title: 'Order BST', text: 'Built from all the loaded orders, middle-first, so search by ID stays fast.' },
+];
+const SAVE_STEPS: { title: string; text: string }[] = [
+  { title: 'A normal Store action', text: 'e.g. change status: validated, list + BST updated together, queue fixed.' },
+  { title: 'Saved back to orders.csv', text: 'The whole file is rewritten via a temp file, then atomically replaced; one activity-log line is appended.' },
+];
+
+function FlowBox({ title, text, className = '' }: { title: string; text: string; className?: string }) {
+  return (
+    <span className={`rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800 ${className}`}>
+      <span className="block text-sm font-semibold text-slate-900 dark:text-white">{title}</span>
+      <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{text}</span>
+    </span>
+  );
+}
+
+function FlowChain({ steps }: { steps: { title: string; text: string }[] }) {
+  return (
+    <div className="flex flex-wrap items-stretch gap-2">
+      {steps.map((step, i) => (
+        <span key={step.title} className="contents">
+          <FlowBox title={step.title} text={step.text} className="w-40" />
+          {i < steps.length - 1 && (
+            <ArrowRight className="h-4 w-4 shrink-0 self-center text-slate-400" aria-hidden />
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 export default function Orders() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -41,6 +91,124 @@ export default function Orders() {
   const [actionBusy, setActionBusy] = useState(false);
   const [statusBusyId, setStatusBusyId] = useState<number | null>(null);
 
+  // ---- "How CSV becomes orders" educational panel (read-only) ----
+  // Everything shown here comes from existing read endpoints plus the
+  // new bounded csv-preview endpoint. The panel never mutates
+  // anything: status changes still go through the table controls.
+  const [csvOpen, setCsvOpen] = useState(false);
+  const panelOpened = useRef(false);
+  const [preview, setPreview] = useState<CsvPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [panelOrders, setPanelOrders] = useState<Order[]>([]);
+  const [panelQueue, setPanelQueue] = useState<Order[]>([]);
+  const [panelTree, setPanelTree] = useState<OrderTree | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selDetail, setSelDetail] = useState<OrderDetail | null>(null);
+  const [selLoading, setSelLoading] = useState(false);
+  const [selError, setSelError] = useState<string | null>(null);
+  const [lastChange, setLastChange] = useState<LastChange | null>(null);
+  // True while the displayed preview may predate the last mutation:
+  // the panel must not claim a refresh (or highlight a row) until
+  // the file has actually been re-read successfully.
+  const [previewStale, setPreviewStale] = useState(true);
+  // Generation guard for panel loads: every load start and every
+  // mutation bumps the generation, so only the newest request may
+  // apply its result. A response that arrives after a newer load
+  // or mutation started is discarded entirely (see loadPanelData
+  // in csvView.ts) — it must not overwrite newer rows, clear the
+  // stale flag, or produce a "refreshed" message.
+  const panelGuard = useRef(new PanelRequestGuard());
+  // Generation guard for inspector detail loads: a response is
+  // applied only while no newer selection request has started AND
+  // its order is still selected (see loadSelectionData in
+  // csvView.ts). Selection changes are reported to the guard
+  // synchronously (changeSelection below), so a late response for
+  // a previously selected — or deleted — order is discarded
+  // instead of repopulating the inspector.
+  const selectionGuard = useRef(new SelectionRequestGuard());
+
+  // Record a successful mutation for the panel: it replaces any
+  // earlier "last change" report, invalidates any in-flight panel
+  // load, and marks the preview stale until the file has been
+  // successfully re-read.
+  const noteMutation = useCallback((change: LastChange) => {
+    panelGuard.current.invalidate();
+    setPreviewStale(true);
+    setLastChange(change);
+  }, []);
+
+  const loadPanel = useCallback(async () => {
+    const token = panelGuard.current.begin();
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      await loadPanelData(
+        { getCsvPreview, getOrders, getQueue, getOrderTree },
+        panelGuard.current,
+        token,
+        ({ preview: pv, orders: all, queue, tree }) => {
+          setPreview(pv);
+          setPanelOrders(all);
+          setPanelQueue(queue);
+          setPanelTree(tree);
+          setPreviewStale(false);
+        },
+      );
+      // If the load was discarded as stale, nothing above ran: the
+      // newer request (or the mutation's own refresh) owns the
+      // panel state, the stale flag, and the loading indicator.
+    } catch (e) {
+      if (!panelGuard.current.isCurrent(token)) return; // stale: discard silently
+      setPreviewError(errorMessage(e, 'Could not load the CSV preview.'));
+    } finally {
+      if (panelGuard.current.isCurrent(token)) setPreviewLoading(false);
+    }
+  }, []);
+
+  // Change (or clear) the inspected order. The guard is told
+  // synchronously, so a detail response already in flight for the
+  // previous selection is stale from this moment and cannot
+  // repopulate the inspector when it arrives late.
+  const changeSelection = (id: number | null) => {
+    selectionGuard.current.selectionChanged(id);
+    setSelectedId(id);
+    if (id === null) {
+      setSelDetail(null);
+      setSelError(null);
+      setSelLoading(false);
+    }
+  };
+
+  const loadSelection = useCallback(async (id: number) => {
+    const token = selectionGuard.current.begin(id);
+    setSelLoading(true);
+    setSelError(null);
+    try {
+      await loadSelectionData(getOrder, selectionGuard.current, token, id, (detail) => {
+        setSelDetail(detail);
+      });
+      // If the response was discarded as stale, nothing above ran:
+      // the newer selection (or its own load) owns the inspector,
+      // the error banner, and the loading indicator.
+    } catch (e) {
+      if (!selectionGuard.current.isCurrent(token, id)) return; // stale: discard silently
+      setSelDetail(null);
+      setSelError(errorMessage(e, 'Could not load that order.'));
+    } finally {
+      if (selectionGuard.current.isCurrent(token, id)) setSelLoading(false);
+    }
+  }, []);
+
+  // After any successful mutation the backend has rewritten
+  // orders.csv, so re-read the panel data — but only once the panel
+  // has been opened, to avoid four extra GETs on every action.
+  const refreshPanelAfterMutation = useCallback((changedId?: number) => {
+    if (!panelOpened.current) return;
+    void loadPanel();
+    if (changedId !== undefined && changedId === selectedId) void loadSelection(changedId);
+  }, [loadPanel, loadSelection, selectedId]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -61,6 +229,19 @@ export default function Orders() {
   useEffect(() => {
     if (!searchActive) void load();
   }, [load, searchActive]);
+
+  useEffect(() => {
+    if (selectedId !== null) void loadSelection(selectedId);
+  }, [selectedId, loadSelection]);
+
+  const toggleCsvPanel = () => {
+    const next = !csvOpen;
+    setCsvOpen(next);
+    if (next) {
+      panelOpened.current = true;
+      void loadPanel();
+    }
+  };
 
   const refresh = () => {
     setSearchActive(false);
@@ -127,9 +308,11 @@ export default function Orders() {
     try {
       const created = await createOrder({ ...form, price_pkr: Number(form.price_pkr), quantity: Number(form.quantity) });
       setNotice(`Order #${created.id} created (Pending).`);
+      noteMutation({ kind: 'created', id: created.id });
       setShowAdd(false);
       setForm(EMPTY_FORM);
       refresh();
+      refreshPanelAfterMutation();
     } catch (err) {
       // Server 400 message shown verbatim; UI is NOT updated on failure.
       setFormError(errorMessage(err, 'Could not create the order.'));
@@ -141,10 +324,15 @@ export default function Orders() {
   const changeStatus = async (order: Order, next: OrderStatus) => {
     setStatusBusyId(order.id);
     setError(null);
+    const before = order.status;
     try {
       await updateOrderStatus(order.id, next);
       setNotice(`Order #${order.id} is now ${next}.`);
+      // The backend has rewritten orders.csv: record before/after for
+      // the educational panel and refresh its live file preview.
+      noteMutation({ kind: 'status', id: order.id, from: before, to: next });
       refresh();
+      refreshPanelAfterMutation(order.id);
     } catch (e) {
       setError(errorMessage(e, 'Status change failed.'));
     } finally {
@@ -154,17 +342,39 @@ export default function Orders() {
 
   const runConfirm = async () => {
     if (!confirm) return;
+    const { kind, order } = confirm;
     setActionBusy(true);
     try {
-      if (confirm.kind === 'cancel') {
-        await cancelOrder(confirm.order.id);
-        setNotice(`Order #${confirm.order.id} cancelled.`);
+      if (kind === 'cancel') {
+        await cancelOrder(order.id);
+        setNotice(`Order #${order.id} cancelled.`);
+        // Replace any earlier "last change" report: the row now
+        // ends with ,Cancelled, not the previous transition.
+        noteMutation({ kind: 'cancelled', id: order.id });
       } else {
-        await deleteOrder(confirm.order.id);
-        setNotice(`Order #${confirm.order.id} deleted.`);
+        await deleteOrder(order.id);
+        setNotice(`Order #${order.id} deleted.`);
+        noteMutation({
+          kind: 'deleted',
+          id: order.id,
+          // Was this order's row actually shown in the preview the
+          // user is looking at? Only then can the refreshed
+          // preview verify its absence; a row beyond the bounded
+          // preview was never visible (see lastChangeMessage).
+          wasInPreview:
+            preview !== null && preview.available && previewRowFor(preview.rows, order.id) !== null,
+        });
+        // The inspected order is gone: clear the selection instead
+        // of leaving its stale details on screen. changeSelection
+        // also invalidates any detail request still in flight for
+        // it, so a late response cannot repopulate the inspector.
+        if (selectedId === order.id) {
+          changeSelection(null);
+        }
       }
       setConfirm(null);
       refresh();
+      refreshPanelAfterMutation(kind === 'cancel' ? order.id : undefined);
     } catch (e) {
       setError(errorMessage(e, 'That action failed — nothing was changed.'));
       setConfirm(null);
@@ -172,6 +382,17 @@ export default function Orders() {
       setActionBusy(false);
     }
   };
+
+  // What the panel may honestly claim about the file preview: it
+  // counts as refreshed only after a successful re-read that
+  // postdates the last mutation (see loadPanel / noteMutation).
+  const previewState: PreviewState = {
+    refreshed: !previewStale,
+    available: preview?.available ?? false,
+    rows: preview?.available ? preview.rows : [],
+    previewRows: preview?.preview_rows ?? 10,
+  };
+  const changedId = changedRowId(lastChange, previewState);
 
   return (
     <div className="space-y-4">
@@ -185,6 +406,212 @@ export default function Orders() {
         <button onClick={() => { setShowAdd(true); setFormError(null); }} className={`inline-flex items-center gap-2 ${buttonPrimary}`}>
           <Plus className="h-4 w-4" aria-hidden /> Add Order
         </button>
+      </div>
+
+      {/* "How CSV becomes orders" — educational, read-only panel.
+          The diagram describes the real backend flow (Store::loadOrders
+          + Store::saveAtomic). The file preview is the actual runtime
+          orders.csv, fetched from GET /api/orders/csv-preview; all CSV
+          text below is rendered as plain text, never as HTML. */}
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <button
+          onClick={toggleCsvPanel}
+          aria-expanded={csvOpen}
+          className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+        >
+          <span className="flex items-center gap-3">
+            <FileText className="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
+            <span>
+              <span className="block font-semibold text-slate-900 dark:text-white">How CSV becomes orders</span>
+              <span className="block text-xs text-slate-500 dark:text-slate-400">
+                See the real orders.csv file and how each row becomes an Order in the linked list, queue and BST.
+              </span>
+            </span>
+          </span>
+          {csvOpen ? <ChevronUp className="h-5 w-5 shrink-0 text-slate-400" aria-hidden /> : <ChevronDown className="h-5 w-5 shrink-0 text-slate-400" aria-hidden />}
+        </button>
+
+        {csvOpen && (
+          <div className="space-y-5 border-t border-slate-200 px-4 py-4 dark:border-slate-700">
+            {/* Flow diagram (matches Store::loadOrders / saveAtomic).
+                Two labelled stages; the three structures are parallel
+                branches from the parsed orders, not a chain. The
+                stage containers keep the grouping clear when the
+                boxes wrap on a narrow screen. */}
+            <div className="space-y-3">
+              <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Stage 1 · Load — when the server starts (Store::loadOrders)
+                </p>
+                <FlowChain steps={LOAD_STEPS} />
+                <p className="mb-2 mt-3 text-xs text-slate-500 dark:text-slate-400">
+                  Each parsed Order is then used in three places at once:
+                </p>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {LOAD_BRANCHES.map((branch) => (
+                    <FlowBox key={branch.title} title={branch.title} text={branch.text} className="w-full" />
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Stage 2 · Save — on every successful change
+                </p>
+                <FlowChain steps={SAVE_STEPS} />
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                The tree in this flow is the order ID binary search tree (the Order BST). It is not an abstract syntax tree.
+              </p>
+            </div>
+
+            {/* Live runtime file preview */}
+            <div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-semibold text-slate-900 dark:text-white">The actual runtime file</h3>
+                <button onClick={() => void loadPanel()} disabled={previewLoading} className={`inline-flex items-center gap-1 ${buttonSecondary}`}>
+                  <RefreshCw className="h-4 w-4" aria-hidden /> Refresh preview
+                </button>
+              </div>
+              {previewError && <ErrorBanner message={previewError} onRetry={() => void loadPanel()} />}
+              {previewLoading && !preview ? (
+                <Spinner label="Reading orders.csv from the server…" />
+              ) : preview && !preview.available ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/60 dark:text-amber-200" role="status">
+                  <p className="font-medium">File not available: <code className="font-mono">{preview.path}</code></p>
+                  <p>{preview.message ?? 'The runtime orders.csv could not be read.'}</p>
+                </div>
+              ) : preview ? (
+                <>
+                  <p className="mb-2 text-sm text-slate-500 dark:text-slate-400">
+                    Live file on disk: <code className="font-mono text-slate-700 dark:text-slate-200">{preview.path}</code> — read fresh from the
+                    server on every refresh. Showing the first {preview.preview_rows} of {preview.total_rows} data rows
+                    {preview.truncated ? ' (bounded preview — the rest of the file is not sent)' : ''}. Click a row to inspect that order.
+                  </p>
+                  <div className="overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800">
+                    <div className="min-w-[640px]">
+                      <div className="px-2 py-1 font-mono text-xs font-semibold text-slate-700 dark:text-slate-200">{preview.header}</div>
+                      {preview.rows.map((row) => {
+                        const rowId = parseCsvRowId(row);
+                        const isSelected = rowId !== null && rowId === selectedId;
+                        const isChanged = changedId !== null && rowId === changedId;
+                        return (
+                          <button
+                            key={row}
+                            onClick={() => { if (rowId !== null) changeSelection(rowId); }}
+                            aria-label={rowId !== null ? `Inspect order ${rowId}` : 'Inspect this row'}
+                            className={`block w-full rounded px-2 py-1 text-left font-mono text-xs hover:bg-slate-200 dark:hover:bg-slate-700 ${
+                              isSelected ? 'bg-emerald-100 dark:bg-emerald-900/40' : isChanged ? 'bg-amber-100 dark:bg-amber-900/40' : ''
+                            }`}
+                          >
+                            {row}
+                            {isChanged && <span className="ml-2 font-sans font-semibold text-amber-700 dark:text-amber-300">(just changed)</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {lastChange && (
+                    <p className="mt-2 text-sm text-slate-600 dark:text-slate-300" role="status">
+                      {lastChangeMessage(lastChange, previewState)}
+                    </p>
+                  )}
+                </>
+              ) : null}
+            </div>
+
+            {/* One-order inspector */}
+            <div>
+              <h3 className="mb-2 font-semibold text-slate-900 dark:text-white">Inspect one order</h3>
+              <label className="flex max-w-md flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                Pick an order (or click a row in the file preview above)
+                <select
+                  value={selectedId ?? ''}
+                  onChange={(e) => changeSelection(e.target.value ? Number(e.target.value) : null)}
+                  className={inputClass}
+                  aria-label="Pick an order to inspect"
+                >
+                  <option value="">Select an order…</option>
+                  {panelOrders.map((o) => (
+                    <option key={o.id} value={o.id}>#{o.id} — {o.customer_name} ({o.status})</option>
+                  ))}
+                </select>
+              </label>
+
+              {selLoading && <Spinner label="Loading order details…" />}
+              {selError && <ErrorBanner message={selError} />}
+              {selDetail && !selLoading && (
+                <div className="mt-4 space-y-4">
+                  <div>
+                    <h4 className="mb-1 text-sm font-semibold text-slate-900 dark:text-white">Raw row in the file</h4>
+                    {preview && preview.available && previewRowFor(preview.rows, selDetail.order.id) ? (
+                      <p className="overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-800">
+                        {previewRowFor(preview.rows, selDetail.order.id)}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        This order&apos;s row is beyond the first {preview?.preview_rows ?? 10} rows shown in the preview.
+                        The parsed fields below come from GET /api/orders/{selDetail.order.id} instead.
+                      </p>
+                    )}
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      On load, parseOrder() splits this line on commas and converts order_id, price_pkr and quantity to numbers;
+                      the other fields stay as text.
+                    </p>
+                  </div>
+
+                  <div>
+                    <h4 className="mb-2 text-sm font-semibold text-slate-900 dark:text-white">
+                      Parsed fields (live state, from GET /api/orders/{selDetail.order.id} — a BST search on the backend)
+                    </h4>
+                    <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
+                      <div><dt className="text-slate-500 dark:text-slate-400">Order ID</dt><dd className="font-medium">{selDetail.order.id}</dd></div>
+                      <div><dt className="text-slate-500 dark:text-slate-400">Customer</dt><dd className="font-medium">{selDetail.order.customer_name}</dd></div>
+                      <div><dt className="text-slate-500 dark:text-slate-400">Product</dt><dd className="font-medium">{selDetail.order.product}</dd></div>
+                      <div><dt className="text-slate-500 dark:text-slate-400">Category</dt><dd className="font-medium">{selDetail.order.category}</dd></div>
+                      <div><dt className="text-slate-500 dark:text-slate-400">Price × qty</dt><dd className="font-medium">{formatPkr(selDetail.order.price_pkr)} × {selDetail.order.quantity}</dd></div>
+                      <div><dt className="text-slate-500 dark:text-slate-400">City</dt><dd className="font-medium">{selDetail.order.city}</dd></div>
+                      <div><dt className="text-slate-500 dark:text-slate-400">Date</dt><dd className="font-medium">{selDetail.order.order_date}</dd></div>
+                      <div><dt className="text-slate-500 dark:text-slate-400">Status</dt><dd><StatusBadge status={selDetail.order.status} /></dd></div>
+                    </dl>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                      <h4 className="text-sm font-semibold text-slate-900 dark:text-white">Linked List</h4>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        {listPosition(panelOrders, selDetail.order.id) > 0
+                          ? <>Position {listPosition(panelOrders, selDetail.order.id)} of {panelOrders.length}. The list keeps orders in file order — GET /api/orders returns them in this order, and every save writes them back in this order.</>
+                          : <>Not in the list the API just returned — it may have been deleted. Refresh the preview to re-check.</>}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                      <h4 className="text-sm font-semibold text-slate-900 dark:text-white">Processing Queue</h4>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{queueNote(selDetail.order, panelQueue)}</p>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                      <h4 className="text-sm font-semibold text-slate-900 dark:text-white">Order BST</h4>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        {panelTree
+                          ? <>{treeContains(panelTree.root, selDetail.order.id)
+                              ? <>Found in the Order BST (size {panelTree.size}, height {panelTree.height}) — the ID index behind Search by ID. </>
+                              : <>Not found in the Order BST the API just returned (size {panelTree.size}, height {panelTree.height}). </>}
+                            Conceptual illustration: a search starts at the root and goes left or right by comparing IDs, so an order is
+                            usually found in a few steps — the DSA Performance page measures the real step counts.</>
+                          : <>Tree data not loaded yet.</>}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    To see the file change: use the &ldquo;Move to…&rdquo; control in the table below to change this order&apos;s status.
+                    The backend validates the change, updates the list and BST together, fixes the queue, rewrites orders.csv
+                    (temp file, then atomic replace) and appends one activity-log line. Then refresh the preview above.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {notice && (

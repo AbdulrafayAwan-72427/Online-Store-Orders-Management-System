@@ -1,0 +1,324 @@
+// csvView.ts — pure helpers for the "How CSV becomes orders"
+// educational view on the Orders page. No direct fetching here:
+// these functions only interpret data the existing API endpoints
+// already return (the CSV preview, the order list in linked-list
+// order, the queue front -> rear, and the whole Order BST). The two
+// loaders at the bottom (loadPanelData, loadSelectionData) take
+// their fetch functions as injected dependencies, so they too can
+// be unit-tested without a backend — including with deferred
+// promises that finish out of order. Kept separate so everything
+// can be tested in isolation.
+import type { CsvPreview, Order, OrderDetail, OrderStatus, OrderTree, OrderTreeNode } from './api';
+
+/**
+ * The order ID of one raw CSV data line (its first comma-separated
+ * field), or null when that field is not a plain number. Mirrors
+ * what parseOrder does with stoi on the backend, minus the throw.
+ */
+export function parseCsvRowId(line: string): number | null {
+  const first = line.split(',')[0]?.trim() ?? '';
+  if (!/^\d+$/.test(first)) return null;
+  return Number(first);
+}
+
+/**
+ * 1-based position of an order in the list returned by
+ * GET /api/orders, which is the backend's linked-list order
+ * (insertion/file order). Returns -1 when the order is not in the
+ * given list (e.g. it was deleted after the list was fetched).
+ */
+export function listPosition(orders: Order[], id: number): number {
+  const i = orders.findIndex((o) => o.id === id);
+  return i === -1 ? -1 : i + 1;
+}
+
+/**
+ * Is this order ID present in the Order BST returned by
+ * GET /api/orders/tree? A plain walk over the returned nodes —
+ * membership is all the endpoint needs to prove here; the tree
+ * itself (size/height) comes straight from the same response.
+ */
+export function treeContains(node: OrderTreeNode | null, id: number): boolean {
+  if (!node) return false;
+  if (node.order_id === id) return true;
+  return treeContains(node.left, id) || treeContains(node.right, id);
+}
+
+/**
+ * Plain-English queue membership note for one order, given the live
+ * queue from GET /api/queue (Pending orders, front -> rear).
+ * The queue invariant (Store): exactly the Pending orders, in
+ * arrival order — so a non-Pending order is never in it.
+ */
+export function queueNote(order: Order, queue: Order[]): string {
+  if (order.status !== 'Pending') {
+    return `Not in the queue — only Pending orders are in the processing queue. This order is ${order.status}.`;
+  }
+  const i = queue.findIndex((o) => o.id === order.id);
+  if (i === -1) {
+    return 'Marked Pending, but not found in the queue the API just returned — refresh to re-check.';
+  }
+  return `In the processing queue — position ${i + 1} of ${queue.length} (the front is processed next).`;
+}
+
+/**
+ * The raw preview row belonging to an order ID, or null when the
+ * order's row is beyond the bounded preview (or the file is
+ * unavailable). Rows are matched by their first field, exactly as
+ * the backend's parseOrder reads the ID.
+ */
+export function previewRowFor(rows: string[], id: number): string | null {
+  return rows.find((r) => parseCsvRowId(r) === id) ?? null;
+}
+
+/**
+ * The status field (9th comma-separated column) of one raw CSV
+ * data row, or null when the row has fewer fields. Mirrors the
+ * backend's parseOrder, which reads the status from column 9.
+ */
+export function rowStatus(row: string): string | null {
+  const s = row.split(',')[8]?.trim();
+  return s ? s : null;
+}
+
+/**
+ * The most recent successful mutation made through the Orders page
+ * controls, as the educational panel reports it. One record covers
+ * every mutation kind, so a later action always replaces — never
+ * contradicts — the report of an earlier one.
+ *
+ * A deletion also records whether the order's row was actually
+ * shown in the displayed (bounded) preview before the delete:
+ * only then can a refreshed preview verify the row's absence. A
+ * row beyond the preview was never visible, so its removal cannot
+ * be claimed from the preview.
+ */
+export type LastChange =
+  | { kind: 'status'; id: number; from: OrderStatus; to: OrderStatus }
+  | { kind: 'cancelled'; id: number }
+  | { kind: 'deleted'; id: number; wasInPreview: boolean }
+  | { kind: 'created'; id: number };
+
+/** What the panel currently knows about the on-disk file preview. */
+export interface PreviewState {
+  /**
+   * True only when the displayed preview was successfully re-read
+   * after the change was made. A stale preview still shows the old
+   * rows and must not be described as refreshed.
+   */
+  refreshed: boolean;
+  /** False when the runtime file could not be read. */
+  available: boolean;
+  /** Raw data rows currently displayed (the bounded preview). */
+  rows: string[];
+  /** How many data rows the bounded preview shows. */
+  previewRows: number;
+}
+
+/**
+ * The order ID whose preview row should carry the "(just changed)"
+ * highlight, or null. The highlight appears only when the preview
+ * was successfully refreshed after the change — highlighting a
+ * stale row would contradict the file. A deleted order has no row
+ * left to highlight.
+ */
+export function changedRowId(change: LastChange | null, state: PreviewState): number | null {
+  if (!change || change.kind === 'deleted') return null;
+  if (!state.refreshed || !state.available) return null;
+  return change.id;
+}
+
+/**
+ * The one-line "last change" report shown under the file preview.
+ * It claims the preview was refreshed only when it actually was,
+ * and any final status it states is read from the refreshed row
+ * itself — never assumed from the action that was requested.
+ */
+export function lastChangeMessage(change: LastChange, state: PreviewState): string {
+  const base =
+    change.kind === 'status'
+      ? `Last change through the controls on this page: Order #${change.id} ${change.from} → ${change.to}.`
+      : change.kind === 'cancelled'
+        ? `Last change through the controls on this page: Order #${change.id} cancelled.`
+        : change.kind === 'deleted'
+          ? `Last change through the controls on this page: Order #${change.id} deleted.`
+          : `Last change through the controls on this page: Order #${change.id} created (Pending).`;
+
+  if (!state.refreshed) {
+    return `${base} The backend rewrote orders.csv, but the preview above has not been refreshed yet, so it may not show the saved row — use Refresh preview.`;
+  }
+  if (!state.available) {
+    return `${base} The preview above could not be re-read (the runtime file is unavailable), so the saved row cannot be shown here.`;
+  }
+  const row = previewRowFor(state.rows, change.id);
+  if (change.kind === 'deleted') {
+    if (row) {
+      return `${base} The preview above was refreshed, but a row for Order #${change.id} is still shown — refresh again to re-check.`;
+    }
+    // Absence from the refreshed preview only verifies the removal
+    // when the row was actually shown before the delete. A row
+    // beyond the bounded preview was never visible, so the preview
+    // cannot verify anything about it — say exactly that instead.
+    return change.wasInPreview
+      ? `${base} The preview above was refreshed — Order #${change.id}'s row, which was shown in the preview before the delete, is no longer in the file.`
+      : `${base} The delete succeeded through the API. Order #${change.id}'s row was not shown in the preview before the delete — the preview covers only the first ${state.previewRows} rows — so it cannot show the removal.`;
+  }
+  if (row) {
+    const status = rowStatus(row);
+    return status
+      ? `${base} The preview above was refreshed — the highlighted row now ends with ,${status}.`
+      : `${base} The preview above was refreshed — the highlighted row is Order #${change.id}'s saved row.`;
+  }
+  if (change.kind === 'created') {
+    return `${base} The preview above was refreshed — the new row is appended at the end of the file, beyond the first ${state.previewRows} rows shown.`;
+  }
+  return `${base} The preview above was refreshed — this order's row is beyond the first ${state.previewRows} rows shown, so it is not visible in the preview.`;
+}
+
+// ---- Panel loading coordination (out-of-order safety) ----
+
+/** The four read-endpoint results the educational panel displays. */
+export interface PanelData {
+  preview: CsvPreview;
+  orders: Order[];
+  queue: Order[];
+  tree: OrderTree;
+}
+
+/**
+ * The read endpoints loadPanelData needs, injected so the loader
+ * can be unit-tested with deferred promises instead of a backend.
+ * In the app these are the real functions from api.ts.
+ */
+export interface PanelFetchers {
+  getCsvPreview: () => Promise<CsvPreview>;
+  getOrders: () => Promise<Order[]>;
+  getQueue: () => Promise<Order[]>;
+  getOrderTree: () => Promise<OrderTree>;
+}
+
+/**
+ * Generation guard for panel loads. Every load start (begin) and
+ * every mutation (invalidate) bumps the generation, so only the
+ * newest request may apply its result. A response that arrives
+ * after a newer load or mutation started is stale and must be
+ * discarded entirely — it may not overwrite newer rows, clear the
+ * stale flag, or produce a "refreshed" claim.
+ */
+export class PanelRequestGuard {
+  private generation = 0;
+
+  /** Start a new load; returns the token to present on completion. */
+  begin(): number {
+    this.generation += 1;
+    return this.generation;
+  }
+
+  /** Invalidate any in-flight load (call on every mutation). */
+  invalidate(): void {
+    this.generation += 1;
+  }
+
+  /** True only while no newer load or mutation has started. */
+  isCurrent(token: number): boolean {
+    return token === this.generation;
+  }
+}
+
+/**
+ * Fetch the four panel datasets and apply them — but only if this
+ * load is still the newest when the responses arrive. If a newer
+ * load or a mutation started meanwhile, the whole response is
+ * discarded ('discarded') and `apply` is never called, so stale
+ * rows can never overwrite newer ones and a stale response can
+ * never claim the preview was refreshed. Fetch errors propagate
+ * to the caller, which gates its error/loading UI on the same
+ * token (guard.isCurrent(token)).
+ */
+export async function loadPanelData(
+  fetchers: PanelFetchers,
+  guard: PanelRequestGuard,
+  token: number,
+  apply: (data: PanelData) => void,
+): Promise<'applied' | 'discarded'> {
+  const [preview, orders, queue, tree] = await Promise.all([
+    fetchers.getCsvPreview(),
+    fetchers.getOrders(),
+    fetchers.getQueue(),
+    fetchers.getOrderTree(),
+  ]);
+  if (!guard.isCurrent(token)) return 'discarded';
+  apply({ preview, orders, queue, tree });
+  return 'applied';
+}
+
+// ---- Selection loading coordination (out-of-order safety) ----
+
+/**
+ * Generation guard for inspector detail loads (GET /api/orders/:id).
+ * It tracks both a generation counter and the currently selected
+ * order ID, because a detail response may be applied only when
+ * BOTH still hold on arrival: no newer selection request has
+ * started, and its order is still the selected one. Selection
+ * changes are reported synchronously (selectionChanged) at the
+ * moment the user picks another order, clears the selection, or
+ * the selected order is deleted — so a response already in flight
+ * for the previous selection is stale from that instant, even
+ * before the next request begins.
+ */
+export class SelectionRequestGuard {
+  private generation = 0;
+  private selectedId: number | null = null;
+
+  /** Start a detail request for `id`; returns the token to present on completion. */
+  begin(id: number): number {
+    this.generation += 1;
+    this.selectedId = id;
+    return this.generation;
+  }
+
+  /**
+   * The selection changed: another order was picked, the selection
+   * was cleared (null), or the selected order was deleted. Any
+   * detail request started earlier is stale from now on, so its
+   * late response cannot repopulate the inspector. Re-selecting
+   * the order that is already selected is a no-op, so an
+   * in-flight request for it survives.
+   */
+  selectionChanged(id: number | null): void {
+    if (id === this.selectedId) return;
+    this.generation += 1;
+    this.selectedId = id;
+  }
+
+  /**
+   * True only while no newer selection request has started AND
+   * `id` is still the selected order.
+   */
+  isCurrent(token: number, id: number): boolean {
+    return token === this.generation && this.selectedId === id;
+  }
+}
+
+/**
+ * Fetch one order's detail and apply it — but only if this
+ * request is still the newest AND its order is still selected
+ * when the response arrives. Otherwise the whole response is
+ * discarded ('discarded') and `apply` is never called, so a late
+ * response for a previously selected order can never overwrite
+ * the inspector's current order. Fetch errors propagate to the
+ * caller, which gates its error/loading UI on the same token
+ * (guard.isCurrent(token, id)).
+ */
+export async function loadSelectionData(
+  fetchDetail: (id: number) => Promise<OrderDetail>,
+  guard: SelectionRequestGuard,
+  token: number,
+  id: number,
+  apply: (detail: OrderDetail) => void,
+): Promise<'applied' | 'discarded'> {
+  const detail = await fetchDetail(id);
+  if (!guard.isCurrent(token, id)) return 'discarded';
+  apply(detail);
+  return 'applied';
+}
